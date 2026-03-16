@@ -1,0 +1,14 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+# sh:not – shape negation: the property in sh:not's inner shape becomes a negative predicate
+<http:exemple.ca/foo>
+    a sh:NodeShape ;
+    sh:property [
+        sh:path foaf:prop1 ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+    ] ;
+    sh:not [
+        sh:path foaf:prop2 ;
+    ] .

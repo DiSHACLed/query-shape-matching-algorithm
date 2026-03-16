@@ -1,0 +1,41 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+<http:exemple.ca/foo>
+    a sh:NodeShape ;
+    sh:property [
+        sh:path foaf:prop1 ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+    ] ;
+    sh:property [
+        sh:path foaf:prop2 ;
+        sh:minCount 0 ;
+        sh:maxCount 0 ;
+    ] ;
+    sh:property [
+        sh:path foaf:prop3 ;
+        sh:minCount 5 ;
+        sh:maxCount 5 ;
+    ] ;
+    sh:property [
+        sh:path foaf:prop4 ;
+        sh:minCount 1 ;
+        sh:maxCount 4 ;
+    ] ;
+    sh:property [
+        sh:path foaf:prop5 ;
+        sh:minCount 1 ;
+        sh:maxCount -1 ;
+    ] ;
+    sh:property [
+        sh:path foaf:prop6 ;
+        sh:minCount 0 ;
+        sh:maxCount 1 ;
+    ] ;
+    sh:property [
+        sh:path foaf:prop7 ;
+        sh:minCount 0 ;
+        sh:maxCount -1 ;
+    ] .

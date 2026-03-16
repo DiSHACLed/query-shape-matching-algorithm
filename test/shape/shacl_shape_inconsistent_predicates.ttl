@@ -1,0 +1,16 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+
+# Both positive and negative predicate for the same property → triggers InconsistentPositiveAndNegativePredicateError
+<http:exemple.ca/foo>
+    a sh:NodeShape ;
+    sh:property [
+        sh:path foaf:prop1 ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+    ] ;
+    sh:property [
+        sh:path foaf:prop1 ;
+        sh:minCount 0 ;
+        sh:maxCount 0 ;
+    ] .

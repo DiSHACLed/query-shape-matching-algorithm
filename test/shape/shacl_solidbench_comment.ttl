@@ -1,0 +1,84 @@
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix snvoc: <http://localhost:3000/www.ldbc.eu/ldbc_socialnet/1.0/vocabulary/> .
+@prefix rdf:   <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+<http://example.com#Comment>
+    a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+        sh:path rdf:type ;
+        sh:minCount 0 ;
+        sh:maxCount 1 ;
+        sh:class snvoc:Comment ;
+    ] ;
+    sh:property [
+        sh:path snvoc:id ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:long ;
+    ] ;
+    sh:property [
+        sh:path snvoc:creationDate ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:dateTime ;
+    ] ;
+    sh:property [
+        sh:path snvoc:locationIP ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+    ] ;
+    sh:property [
+        sh:path snvoc:browserUsed ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+    ] ;
+    sh:property [
+        sh:path snvoc:content ;
+        sh:minCount 0 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+    ] ;
+    sh:property [
+        sh:path snvoc:lenght ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:int ;
+    ] ;
+    sh:property [
+        sh:path snvoc:hasTag ;
+        sh:minCount 0 ;
+        sh:maxCount -1 ;
+    ] ;
+    sh:property [
+        sh:path snvoc:isLocatedIn ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+    ] ;
+    sh:property [
+        sh:path snvoc:hasCreator ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:node <http://example.com#Profile> ;
+    ] ;
+    sh:or (
+        [
+            sh:property [
+                sh:path snvoc:replyOf ;
+                sh:minCount 0 ;
+                sh:maxCount -1 ;
+                sh:node <http://example.com#Post> ;
+            ] ;
+        ]
+        [
+            sh:property [
+                sh:path snvoc:replyOf ;
+                sh:minCount 0 ;
+                sh:maxCount -1 ;
+                sh:node <http://example.com#Comment> ;
+            ] ;
+        ]
+    ) .

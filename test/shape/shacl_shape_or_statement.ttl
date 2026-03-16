@@ -1,0 +1,32 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Shape with sh:or: two alternative branches
+<http:exemple.ca/foo>
+    a sh:NodeShape ;
+    sh:property [
+        sh:path rdfs:mbox ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+    ] ;
+    sh:or (
+        [
+            sh:property [
+                sh:path rdfs:givenName ;
+                sh:minCount 1 ;
+                sh:maxCount -1 ;
+            ] ;
+            sh:property [
+                sh:path rdfs:familyName ;
+                sh:minCount 1 ;
+                sh:maxCount 1 ;
+            ] ;
+        ]
+        [
+            sh:property [
+                sh:path rdfs:name ;
+                sh:minCount 1 ;
+                sh:maxCount 1 ;
+            ] ;
+        ]
+    ) .

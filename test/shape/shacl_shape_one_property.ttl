@@ -1,0 +1,9 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix ex:   <http://example.org/> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+<http:exemple.ca/foo>
+    a sh:NodeShape ;
+    sh:property [
+        sh:path ex:state ;
+    ] .

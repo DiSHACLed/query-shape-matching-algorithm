@@ -1,0 +1,14 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# Target shape
+<http:exemple.ca/foo>
+    a sh:NodeShape ;
+    sh:property [ sh:path foaf:name ] ;
+    sh:property [ sh:path foaf:mbox ] .
+
+# Unrelated second shape - should be ignored
+<http:exemple.ca/bar>
+    a sh:NodeShape ;
+    sh:property [ sh:path foaf:age ] .

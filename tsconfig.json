@@ -1,0 +1,32 @@
+{
+  "compileOnSave": true,
+  "compilerOptions": {
+    "module": "commonjs",
+    "lib": [
+      "ES2023",
+      "dom"
+    ],
+    "target": "ES2022",
+    "noImplicitAny": true,
+    "removeComments": false,
+    "preserveConstEnums": true,
+    "sourceMap": true,
+    "inlineSources": true,
+    "declaration": true,
+    "importHelpers": false,
+    "strict": true,
+    "outDir": "./build",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "index.ts",
+    "lib/**/*",
+    "bin/**/*"
+  ],
+  "exclude": [
+    "**/node_modules",
+    "**/test/*"
+  ]
+}
