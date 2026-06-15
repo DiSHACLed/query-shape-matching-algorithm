@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import type * as RDF from '@rdfjs/types';
 import * as N3 from 'n3';
 import { DataFactory } from 'rdf-data-factory';
+import { describe, expect, it } from 'vitest';
 import { streamifyArray } from 'streamify-array';
 import { SHEX_SHAPE, TYPE_DEFINITION, SHEX_PREDICATE } from '../lib/constant';
 import { ConstraintType, IContraint, OneOf, type IShape } from '../lib/Shape';
