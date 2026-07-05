@@ -86,16 +86,17 @@ const personShape = await shexShapeFromQuads(shexQuads, "http://example.org/Pers
 
 The library returns a report where each star pattern is assigned one of the following `ContainmentResult` values:
 
-| Result         | Description                                                  |
-| :------------- | :----------------------------------------------------------- |
-| **`CONTAIN`**  | All triple patterns in the graph star pattern are covered by the shape's constraints. |
-| **`ALIGNED`**  | At least one triple pattern matches, but some parts of the graph star pattern are not covered. |
-| **`DEPEND`**   | The pattern is reachable via a property that links to another shape (nested containment). |
-| **`REJECTED`** | No part of the star pattern matches any property defined in the shape. |
+| Result             | Description |
+| :----------------- | :---------- |
+| **`CONTAINED`**    | All query star patterns, including nested ones, are matched by the shape. |
+| **`ALIGNED`**      | At least one triple pattern from the root star pattern matches on an open shape. |
+| **`UNALINGED`**    | Partial root star pattern match on a closed shape; or match on a nested star pattern while having no match on root star pattern. |
+| **`WEAKLY_REJECTED`** | None of the triple patterns match on an open shape. |
+| **`REJECTED`**     | None of the triple patterns match on a closed shape. |
 
 ### Examples of Containment Results
 
-#### 1. `CONTAIN`
+#### 1. `CONTAINED`
 
 The star pattern for `?person` is fully covered by the shape.
 
@@ -122,7 +123,29 @@ The star pattern for `?person` is fully covered by the shape.
 
 #### 2. `ALIGNED`
 
-The query matches one property (`foaf:name`), but contains `ex:age` which is not defined in the closed shape.
+The query matches one property (`foaf:name`), but contains `ex:age` which is not defined in the open shape.
+
+* **Query**:
+
+  ```sparql
+  PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+  PREFIX ex: <http://example.org/>
+  SELECT * WHERE {
+    ?person foaf:name ?name ;
+            ex:age ?age .
+  }
+  ```
+
+* **Shape**:
+
+  ```turtle
+  <http://example.org/PersonShape> a sh:NodeShape ;
+    sh:property [ sh:path foaf:name ] .
+  ```
+
+#### 3. `UNALINGED`
+
+The root star pattern has partial matching triples against closed shapes.
 
 * **Query**:
 
@@ -143,16 +166,15 @@ The query matches one property (`foaf:name`), but contains `ex:age` which is not
     sh:property [ sh:path foaf:name ] .
   ```
 
-#### 3. `DEPEND`
-
-The `?person` pattern matches the shape's link to another shape. Its full containment depends on whether `?friend` also matches its shape.
+Another `UNALINGED` case is when the root star pattern does not match, but a nested star pattern (reachable through a linked variable) does on a open or closed shape.
 
 * **Query**:
 
   ```sparql
+  PREFIX ex: <http://example.org/>
   PREFIX foaf: <http://xmlns.com/foaf/0.1/>
   SELECT * WHERE {
-    ?person foaf:knows ?friend . 
+    ?person ex:unknownLink ?friend .
     ?friend foaf:name ?friendName .
   }
   ```
@@ -161,16 +183,36 @@ The `?person` pattern matches the shape's link to another shape. Its full contai
 
   ```turtle
   <http://example.org/PersonShape> a sh:NodeShape ;
-    sh:property [ 
-      sh:path foaf:knows ; 
-      sh:node <http://example.org/FriendShape> 
+    sh:property [
+      sh:path foaf:knows ;
+      sh:node <http://example.org/FriendShape>
     ] .
-  
+
   <http://example.org/FriendShape> a sh:NodeShape ;
     sh:property [ sh:path foaf:name ] .
   ```
 
-#### 4. `REJECTED`
+#### 4. `WEAKLY_REJECTED`
+
+No triple pattern matches and at least one candidate shape is open.
+
+* **Query**:
+
+  ```sparql
+  PREFIX schema: <http://schema.org/>
+  SELECT * WHERE {
+    ?person schema:birthDate ?date .
+  }
+  ```
+
+* **Shape**:
+
+  ```turtle
+  <http://example.org/PersonShape> a sh:NodeShape ;
+    sh:property [ sh:path foaf:name ] .
+  ```
+
+#### 5. `REJECTED`
 
 The query uses `schema:birthDate`, but the shape only defines `foaf:name`.
 
@@ -187,6 +229,7 @@ The query uses `schema:birthDate`, but the shape only defines `foaf:name`.
 
   ```turtle
   <http://example.org/PersonShape> a sh:NodeShape ;
+    sh:closed true ;
     sh:property [ sh:path foaf:name ] .
   ```
 

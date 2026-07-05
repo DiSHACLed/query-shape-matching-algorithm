@@ -114,10 +114,6 @@ export class Bindings implements IBindings {
         }
         const negatedTriples: ITriple[] = [];
         for (const { triple, dependencies } of starPattern.starPattern.values()) {
-            if (!this.closedShape) {
-                this.bindings.set(triple.predicate, triple);
-                continue;
-            }
             if (triple.predicate === Triple.NEGATIVE_PREDICATE_SET) {
                 negatedTriples.push(triple);
                 continue;
@@ -132,17 +128,19 @@ export class Bindings implements IBindings {
                 }
             }
 
-            if (singlePredicate === undefined &&
-                predicates.length === 0
-                && triple.isOptional !== true &&
-                !this.strict) {
-                this.unboundTriple.push(triple);
-            } else {
-                if (singlePredicate !== undefined) {
-                    predicates.push(singlePredicate);
+            if (singlePredicate === undefined && predicates.length === 0) {
+                // Open shapes can ignore unknown predicates, but closed shapes keep
+                // tracking unmatched non-optional predicates.
+                if (this.closedShape && triple.isOptional !== true && !this.strict) {
+                    this.unboundTriple.push(triple);
                 }
-                this.evaluateConstraint(predicates, triple, linkedShape, shape, dependencies);
+                continue;
             }
+
+            if (singlePredicate !== undefined) {
+                predicates.push(singlePredicate);
+            }
+            this.evaluateConstraint(predicates, triple, linkedShape, shape, dependencies);
 
 
 
@@ -169,7 +167,22 @@ export class Bindings implements IBindings {
         const uncontainedUnionStarPatterns: IStarPatternWithDependencies[] = []
 
         if (shape.closed === false) {
-            this.fullyBounded = starPattern.starPattern.size !== 0;
+            let boundedUnion = true;
+            for (const unionBinding of this.unionBindings) {
+                boundedUnion = ((unionBinding.hasOneContained && !this.strict) ||
+                    (this.strict && unionBinding.areAllContained)) && boundedUnion;
+                boundedUnionFull = boundedUnionFull && unionBinding.areAllContained;
+                if (!unionBinding.areAllContained) {
+                    for (const binding of unionBinding.bindings) {
+                        if (!binding.isFullyBounded()) {
+                            uncontainedUnionStarPatterns.push(binding.starPattern);
+                        }
+                    }
+                }
+            }
+            this.fullyBounded = this.getBoundTriple().length === starPattern.starPattern.size
+                && starPattern.starPattern.size !== 0
+                && boundedUnion;
         } else {
             let boundedUnion = true;
             for (const unionBinding of this.unionBindings) {

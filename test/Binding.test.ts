@@ -154,7 +154,7 @@ describe('Bindings', () => {
 
             };
 
-            const expectedBindings = new Map([[triple.predicate, triple], [triple2.predicate, triple2]]);
+            const expectedBindings = new Map([[triple.predicate, undefined], [triple2.predicate, triple2]]);
 
 
             const bindings = new Bindings(shape, starPattern, linkedShape);
@@ -163,7 +163,7 @@ describe('Bindings', () => {
             expect(bindings.shouldVisitShape()).toBe(true);
             expect(bindings.getUnboundedTriple()).toStrictEqual([]);
             expect(bindings.getBindings()).toStrictEqual(expectedBindings);
-            expect(bindings.getBoundTriple()).toStrictEqual([triple, triple2]);
+            expect(bindings.getBoundTriple()).toStrictEqual([triple2]);
             expect(bindings.getNestedContainedStarPatternName()).toStrictEqual([]);
         });
 
@@ -191,16 +191,16 @@ describe('Bindings', () => {
 
             };
 
-            const expectedBindings = new Map([[triple.predicate, triple]]);
+            const expectedBindings = new Map([[triple.predicate, undefined]]);
 
 
             const bindings = new Bindings(shape, starPattern, linkedShape);
 
-            expect(bindings.isFullyBounded()).toBe(true);
-            expect(bindings.shouldVisitShape()).toBe(true);
+            expect(bindings.isFullyBounded()).toBe(false);
+            expect(bindings.shouldVisitShape()).toBe(false);
             expect(bindings.getUnboundedTriple()).toStrictEqual([]);
             expect(bindings.getBindings()).toStrictEqual(expectedBindings);
-            expect(bindings.getBoundTriple()).toStrictEqual([triple]);
+            expect(bindings.getBoundTriple()).toStrictEqual([]);
             expect(bindings.getNestedContainedStarPatternName()).toStrictEqual([]);
         });
 
