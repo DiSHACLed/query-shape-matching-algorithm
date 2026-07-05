@@ -1,5 +1,6 @@
 import { Parser as SPARQLParser } from '@traqula/parser-sparql-1-1';
 import { toAlgebra } from '@traqula/algebra-sparql-1-1';
+import { describe, expect, it, test } from 'vitest';
 import { ConstraintType, IShape, Shape } from '../lib/Shape';
 import { IStarPatternWithDependencies, Triple } from '../lib/Triple';
 import { ContainmentResult, IContainmentResult, IResult, StarPatternName, solveShapeQueryContainment } from '../lib/containment';

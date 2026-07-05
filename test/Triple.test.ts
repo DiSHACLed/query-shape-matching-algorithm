@@ -1,5 +1,6 @@
 import * as RDF from '@rdfjs/types';
 import { DataFactory } from 'rdf-data-factory';
+import { describe, expect, it } from 'vitest';
 import { Triple } from '../lib/Triple';
 
 const DF = new DataFactory<RDF.BaseQuad>();

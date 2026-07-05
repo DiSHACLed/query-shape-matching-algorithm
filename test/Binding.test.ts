@@ -1,4 +1,5 @@
 import { DataFactory } from 'rdf-data-factory';
+import { describe, expect, it, test } from 'vitest';
 import { Bindings, OneOfBinding, UnionBinding } from '../lib/Binding';
 import { ConstraintType, IShape, OneOf, OneOfPathIndexed, Shape } from '../lib/Shape';
 import { IStarPatternWithDependencies, ITriple, Triple } from '../lib/Triple';

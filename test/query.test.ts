@@ -1,5 +1,6 @@
 import type { BaseQuad, Term, Variable } from '@rdfjs/types';
 import { DataFactory } from 'rdf-data-factory';
+import { describe, expect, it, test } from 'vitest';
 import { Parser as SPARQLParser } from '@traqula/parser-sparql-1-1';
 import { toAlgebra } from '@traqula/algebra-sparql-1-1';
 import { TYPE_DEFINITION } from '../lib/constant';

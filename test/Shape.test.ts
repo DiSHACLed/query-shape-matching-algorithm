@@ -6,6 +6,7 @@ import {
   OneOfIndexed, 
   IShapeJson 
 } from '../lib/Shape';
+import { describe, expect, it } from 'vitest';
 
 describe('Shape', () => {
   describe('constructor', () => {
