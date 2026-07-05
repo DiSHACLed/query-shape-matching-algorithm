@@ -1,6 +1,6 @@
 {
   "name": "query-shape-detection",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "main": "./build/index.js",
   "types": "./build/index.d.ts",
   "license": "MIT",
@@ -19,7 +19,6 @@
     "build:watch": "tsc --watch",
     "validate": "npm ls",
     "prepare": "npm run build",
-    "version": "manual-git-changelog onversion",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
