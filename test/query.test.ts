@@ -3,7 +3,7 @@ import { DataFactory } from 'rdf-data-factory';
 import { describe, expect, it, test } from 'vitest';
 import { Parser as SPARQLParser } from '@traqula/parser-sparql-1-1';
 import { toAlgebra } from '@traqula/algebra-sparql-1-1';
-import { TYPE_DEFINITION } from '../lib/constant';
+import { RDF as RDF_VOCAB } from '../lib/constant';
 import { generateQuery, generateStarPatternUnion, IQuery } from '../lib/query';
 import { type IStarPatternWithDependencies, Triple } from '../lib/Triple';
 
@@ -13,7 +13,7 @@ const sparqlParser = new SPARQLParser();
 const RDF_STRING = DF.namedNode('http://www.w3.org/2001/XMLSchema#string');
 const SNVOC_PREFIX = 'http://localhost:3000/www.ldbc.eu/ldbc_socialnet/1.0/vocabulary/';
 const FOAF_PREFIX = 'http://xmlns.com/foaf/0.1/';
-const RDF_TYPE = TYPE_DEFINITION.value;
+const RDF_TYPE = RDF_VOCAB.type;
 
 describe('query', () => {
   describe('generateQuery', () => {

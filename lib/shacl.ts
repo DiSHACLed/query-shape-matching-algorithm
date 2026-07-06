@@ -1,34 +1,20 @@
 import type * as RDF from '@rdfjs/types';
 import { DataFactory } from 'rdf-data-factory';
-import type { IConstraint, OneOf, IShape, IPredicate } from './Shape';
-import { Shape, ConstraintType, PoorlyFormatedShapeError } from './Shape';
+import type { OneOf, IShape, IPredicate } from './Shape';
+import { 
+    PoorlyFormatedShapeError, 
+    walkRdfList, 
+    buildShapeFromRaw, 
+    predicateToParts, 
+    buildPredicate as buildSharedPredicate, 
+    isNegativeCardinality 
+} from './Shape';
 import type { ShapeError } from './Shape';
-
-import {
-    SHACL_PROPERTY,
-    SHACL_PATH,
-    SHACL_MIN_COUNT,
-    SHACL_MAX_COUNT,
-    SHACL_MIN_INCLUSIVE,
-    SHACL_MAX_INCLUSIVE,
-    SHACL_MIN_EXCLUSIVE,
-    SHACL_MAX_EXCLUSIVE,
-    SHACL_PATTERN,
-    SHACL_FLAGS,
-    SHACL_CLOSED,
-    SHACL_CLASS,
-    SHACL_DATATYPE,
-    SHACL_NODE,
-    SHACL_OR,
-    SHACL_XONE,
-    SHACL_NOT,
-    IRI_FIRST_RDF_LIST,
-    IRI_REST_RDF_LIST,
-    IRI_END_RDF_LIST,
-    RDF_TRUE,
-} from './constant';
+import { SHACL, RDF as RDF_VOCAB, XSD } from './constant';
+import { addDiagnostic, getPolicy, type IShapeParserOptions } from './parser-policy';
 
 const DF = new DataFactory();
+const RDF_TRUE = DF.literal('true', DF.namedNode(XSD.boolean));
 
 // ── Internal parsing state ─────────────────────────────────────────────────
 
@@ -99,36 +85,39 @@ function defaultMap(): IMapTripleShacl {
 export function shaclShapeFromQuads(
     quads: RDF.Stream | RDF.Quad[],
     shapeIri: string,
+    options?: IShapeParserOptions,
 ): Promise<IShape | ShapeError> {
     if (Array.isArray(quads)) {
         return new Promise(resolve => {
-            resolve(shapeFromQuadArray(quads, shapeIri));
+            resolve(shapeFromQuadArray(quads, shapeIri, options));
         });
     }
-    return shapeFromQuadStream(quads, shapeIri);
+    return shapeFromQuadStream(quads, shapeIri, options);
 }
 
 function shapeFromQuadStream(
     quadStream: RDF.Stream,
     shapeIri: string,
+    options?: IShapeParserOptions,
 ): Promise<IShape | ShapeError> {
     const map = defaultMap();
     return new Promise(resolve => {
         quadStream.on('data', (quad: RDF.Quad) => { parseQuad(quad, map); });
         quadStream.on('error', (error: any) => { resolve(error); });
-        quadStream.on('end', () => { resolve(buildShape(map, shapeIri)); });
+        quadStream.on('end', () => { resolve(buildShape(map, shapeIri, options)); });
     });
 }
 
 function shapeFromQuadArray(
     quads: RDF.Quad[],
     shapeIri: string,
+    options?: IShapeParserOptions,
 ): IShape | ShapeError {
     const map = defaultMap();
     for (const quad of quads) {
         parseQuad(quad, map);
     }
-    return buildShape(map, shapeIri);
+    return buildShape(map, shapeIri, options);
 }
 
 // ── Quad parsing ───────────────────────────────────────────────────────────
@@ -138,7 +127,7 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
     const o = quad.object.value;
 
     // sh:property  → register property shape under the node shape
-    if (quad.predicate.equals(SHACL_PROPERTY)) {
+    if (quad.predicate.equals(SHACL.terms.property)) {
         let props = map.shapeProperties.get(s);
         if (props === undefined) {
             props = new Set();
@@ -153,97 +142,97 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
     }
 
     // sh:path  → predicate IRI for this property shape
-    if (quad.predicate.equals(SHACL_PATH)) {
+    if (quad.predicate.equals(SHACL.terms.path)) {
         getOrCreatePropData(map, s).path = o;
         return;
     }
 
     // sh:minCount
-    if (quad.predicate.equals(SHACL_MIN_COUNT)) {
+    if (quad.predicate.equals(SHACL.terms.minCount)) {
         getOrCreatePropData(map, s).minCount = Number(o);
         return;
     }
 
     // sh:maxCount
-    if (quad.predicate.equals(SHACL_MAX_COUNT)) {
+    if (quad.predicate.equals(SHACL.terms.maxCount)) {
         getOrCreatePropData(map, s).maxCount = Number(o);
         return;
     }
 
     // sh:minInclusive
-    if (quad.predicate.equals(SHACL_MIN_INCLUSIVE)) {
+    if (quad.predicate.equals(SHACL.terms.minInclusive)) {
         getOrCreatePropData(map, s).minInclusive = Number(o);
         return;
     }
 
     // sh:maxInclusive
-    if (quad.predicate.equals(SHACL_MAX_INCLUSIVE)) {
+    if (quad.predicate.equals(SHACL.terms.maxInclusive)) {
         getOrCreatePropData(map, s).maxInclusive = Number(o);
         return;
     }
 
     // sh:minExclusive
-    if (quad.predicate.equals(SHACL_MIN_EXCLUSIVE)) {
+    if (quad.predicate.equals(SHACL.terms.minExclusive)) {
         getOrCreatePropData(map, s).minExclusive = Number(o);
         return;
     }
 
     // sh:maxExclusive
-    if (quad.predicate.equals(SHACL_MAX_EXCLUSIVE)) {
+    if (quad.predicate.equals(SHACL.terms.maxExclusive)) {
         getOrCreatePropData(map, s).maxExclusive = Number(o);
         return;
     }
 
     // sh:pattern
-    if (quad.predicate.equals(SHACL_PATTERN)) {
+    if (quad.predicate.equals(SHACL.terms.pattern)) {
         getOrCreatePropData(map, s).pattern = o;
         return;
     }
 
     // sh:flags
-    if (quad.predicate.equals(SHACL_FLAGS)) {
+    if (quad.predicate.equals(SHACL.terms.flags)) {
         getOrCreatePropData(map, s).flags = o;
         return;
     }
 
     // sh:closed
-    if (quad.predicate.equals(SHACL_CLOSED)) {
+    if (quad.predicate.equals(SHACL.terms.closed)) {
         map.closedShape.set(s, quad.object.equals(RDF_TRUE));
         return;
     }
 
     // sh:class  → SHAPE constraint
-    if (quad.predicate.equals(SHACL_CLASS)) {
+    if (quad.predicate.equals(SHACL.terms.class)) {
         getOrCreatePropData(map, s).classConstraint = o;
         return;
     }
 
     // sh:datatype  → TYPE constraint
-    if (quad.predicate.equals(SHACL_DATATYPE)) {
+    if (quad.predicate.equals(SHACL.terms.datatype)) {
         getOrCreatePropData(map, s).datatypeConstraint = o;
         return;
     }
 
     // sh:node  → SHAPE constraint (reference to another shape)
-    if (quad.predicate.equals(SHACL_NODE)) {
+    if (quad.predicate.equals(SHACL.terms.node)) {
         getOrCreatePropData(map, s).nodeConstraint = o;
         return;
     }
 
     // sh:or  → alternatives list head
-    if (quad.predicate.equals(SHACL_OR)) {
+    if (quad.predicate.equals(SHACL.terms.or)) {
         map.orLists.set(s, o);
         return;
     }
 
     // sh:xone  → exclusive-one-of list head  (treated same as sh:or for query matching)
-    if (quad.predicate.equals(SHACL_XONE)) {
+    if (quad.predicate.equals(SHACL.terms.xone)) {
         map.xoneLists.set(s, o);
         return;
     }
 
     // sh:not  → negation (blank node property shape that should become a negative predicate)
-    if (quad.predicate.equals(SHACL_NOT)) {
+    if (quad.predicate.equals(SHACL.terms.not)) {
         map.notLinks.set(s, o);
         // Create entry for the negated shape's blank node
         const negData = getOrCreatePropData(map, o);
@@ -252,11 +241,11 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
     }
 
     // rdf:first / rdf:rest for RDF lists (used by sh:or / sh:xone)
-    if (quad.predicate.equals(IRI_FIRST_RDF_LIST)) {
+    if (quad.predicate.equals(RDF_VOCAB.terms.first)) {
         map.listFirst.set(s, o);
         return;
     }
-    if (quad.predicate.equals(IRI_REST_RDF_LIST)) {
+    if (quad.predicate.equals(RDF_VOCAB.terms.rest)) {
         map.listRest.set(s, o);
         return;
     }
@@ -279,6 +268,7 @@ function getOrCreatePropData(
 function buildShape(
     map: IMapTripleShacl,
     shapeIri: string,
+    options?: IShapeParserOptions,
 ): IShape | ShapeError {
     const propIds = map.shapeProperties.get(shapeIri);
     // Collect sh:not negated property shapes from under the target shape
@@ -319,7 +309,7 @@ function buildShape(
     const oneOfs: OneOf[] = [];
     const orHead = map.orLists.get(shapeIri) ?? map.xoneLists.get(shapeIri);
     if (orHead !== undefined) {
-        const branch = resolveOrList(orHead, map);
+        const branch = resolveOrList(orHead, map, shapeIri, options);
         if (branch.length > 0) {
             oneOfs.push(branch);
         }
@@ -327,17 +317,13 @@ function buildShape(
 
     const closed = map.closedShape.get(shapeIri) ?? false;
 
-    try {
-        return new Shape({
-            name: shapeIri,
-            positivePredicates,
-            negativePredicates,
-            closed,
-            oneOf: oneOfs,
-        });
-    } catch (error: unknown) {
-        return error as ShapeError;
-    }
+    return buildShapeFromRaw({
+        name: shapeIri,
+        positivePredicates: positivePredicates.map(predicate => predicateToParts(predicate)),
+        negativePredicates,
+        closed,
+        oneOf: oneOfs.map(currentOneOf => currentOneOf.map(path => path.map(predicateToParts))),
+    });
 }
 
 /** Collect all property-shape blank nodes reachable via sh:not from a shape IRI. */
@@ -352,66 +338,27 @@ function collectNotProps(map: IMapTripleShacl, shapeIri: string): Set<string> {
 
 /** Whether a property shape data entry represents a negative predicate (minCount=0, maxCount=0). */
 function isNegatedData(data: IPropertyShapeData): boolean {
-    return data.minCount === 0 && data.maxCount === 0;
+    return isNegativeCardinality(data.minCount, data.maxCount);
 }
 
 /** Build an IPredicate from a property shape data entry. */
 function buildPredicate(data: IPropertyShapeData): IPredicate {
-    const constraint = resolveConstraint(data);
-    const min = data.minCount;
-    const max = data.maxCount;
-    const hasCardinality = min !== undefined || max !== undefined;
-    return {
+    return buildSharedPredicate({
         name: data.path!,
-        constraint,
-        cardinality: hasCardinality
-            ? { min: min ?? 1, max: max ?? 1 }
-            : undefined,
-    };
-}
-
-function resolveConstraint(data: IPropertyShapeData): IConstraint | undefined {
-    if (data.classConstraint !== undefined) {
-        // sh:class constrains the object to be an instance/class IRI.
-        return {
-            value: new Set([data.classConstraint]),
-            type: ConstraintType.CLASS,
-        };
-    }
-    if (data.nodeConstraint !== undefined) {
-        // sh:node references another shape definition → SHAPE
-        return {
-            value: new Set([data.nodeConstraint]),
-            type: ConstraintType.SHAPE,
-        };
-    }
-    if (data.datatypeConstraint !== undefined) {
-        const numericFacets: Partial<IConstraint> = {};
-        if (data.minInclusive !== undefined) {
-            numericFacets.minInclusive = data.minInclusive;
-        }
-        if (data.maxInclusive !== undefined) {
-            numericFacets.maxInclusive = data.maxInclusive;
-        }
-        if (data.minExclusive !== undefined) {
-            numericFacets.minExclusive = data.minExclusive;
-        }
-        if (data.maxExclusive !== undefined) {
-            numericFacets.maxExclusive = data.maxExclusive;
-        }
-        if (data.pattern !== undefined) {
-            numericFacets.pattern = data.pattern;
-        }
-        if (data.flags !== undefined) {
-            numericFacets.flags = data.flags;
-        }
-        return {
-            value: new Set([data.datatypeConstraint]),
-            type: ConstraintType.DATATYPE,
-            ...numericFacets,
-        };
-    }
-    return undefined;
+        minCount: data.minCount,
+        maxCount: data.maxCount,
+        constraintParts: {
+            classConstraint: data.classConstraint,
+            shapeConstraint: data.nodeConstraint,
+            datatypeConstraint: data.datatypeConstraint,
+            minInclusive: data.minInclusive,
+            maxInclusive: data.maxInclusive,
+            minExclusive: data.minExclusive,
+            maxExclusive: data.maxExclusive,
+            pattern: data.pattern,
+            flags: data.flags,
+        },
+    });
 }
 
 /**
@@ -421,20 +368,35 @@ function resolveConstraint(data: IPropertyShapeData): IConstraint | undefined {
  * Each list member is itself a shape-like blank node that should have
  * sh:property children. We collect those into one OneOfPath per member.
  */
-function resolveOrList(head: string, map: IMapTripleShacl): OneOf {
+function resolveOrList(
+    head: string,
+    map: IMapTripleShacl,
+    shapeIri: string,
+    options?: IShapeParserOptions,
+): OneOf {
     const result: OneOf = [];
-    let current: string | undefined = head;
 
-    while (current !== undefined && current !== IRI_END_RDF_LIST.value) {
-        const memberId = map.listFirst.get(current);
-        if (memberId !== undefined) {
-            const branch = resolveOrMember(memberId, map);
-            if (branch.length > 0) {
-                result.push(branch);
-            }
+    const policy = getPolicy(options);
+    const walked = walkRdfList(head, {
+        firstByNode: map.listFirst,
+        restByNode: map.listRest,
+    });
+
+    if (walked.malformed) {
+        addDiagnostic(options, {
+            level: policy.strictRdfLists ? 'error' : 'warning',
+            code: 'MALFORMED_RDF_LIST',
+            message: `Malformed RDF list while resolving sh:or/sh:xone for <${shapeIri}>`,
+            shapeIri,
+            nodeId: head,
+        });
+    }
+
+    for (const memberId of walked.values) {
+        const branch = resolveOrMember(memberId, map);
+        if (branch.length > 0) {
+            result.push(branch);
         }
-        const next = map.listRest.get(current);
-        current = next === IRI_END_RDF_LIST.value ? undefined : next;
     }
 
     return result;

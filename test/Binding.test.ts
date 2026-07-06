@@ -12,7 +12,7 @@ import * as N3 from 'n3';
 import { readFileSync } from 'fs';
 import { streamifyArray } from 'streamify-array';
 import { shexShapeFromQuads } from '../lib/shex';
-import { TYPE_DEFINITION } from '../lib/constant';
+import { RDF as RDF_VOCAB } from '../lib/constant';
 
 const n3Parser = new N3.Parser();
 const sparqlParser = new SPARQLParser();
@@ -1728,7 +1728,7 @@ describe('Bindings', () => {
             const shape: Shape = new Shape({
                 name: 'foo', positivePredicates: [
                     {
-                        name: TYPE_DEFINITION.value,
+                        name: RDF_VOCAB.type,
                         constraint: {
                             type: ConstraintType.CLASS,
                             value: new Set(["t0"])
@@ -1740,13 +1740,13 @@ describe('Bindings', () => {
 
             const triple: Triple = new Triple({
                 subject: 'y',
-                predicate: TYPE_DEFINITION.value,
+                predicate: RDF_VOCAB.type,
                 object: DF.namedNode('t0')
             });
             const starPattern: IStarPatternWithDependencies = {
                 starPattern: new Map([
                     [
-                        TYPE_DEFINITION.value,
+                        RDF_VOCAB.type,
                         {
                             triple,
                             dependencies: undefined
@@ -1822,7 +1822,7 @@ describe('Bindings', () => {
             const shape: Shape = new Shape({
                 name: 'foo', positivePredicates: [
                     {
-                        name: TYPE_DEFINITION.value,
+                        name: RDF_VOCAB.type,
                         constraint: {
                             type: ConstraintType.CLASS,
                             value: new Set(["t0"])
@@ -1848,7 +1848,7 @@ describe('Bindings', () => {
 
             const triple1: Triple = new Triple({
                 subject: 'y',
-                predicate: TYPE_DEFINITION.value,
+                predicate: RDF_VOCAB.type,
                 object: [DF.namedNode('t0')]
             });
             const triple2: Triple = new Triple({

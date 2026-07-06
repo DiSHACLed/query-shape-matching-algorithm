@@ -3,11 +3,11 @@ import { toAlgebra } from '@traqula/algebra-sparql-1-1';
 import { describe, expect, it, test } from 'vitest';
 import { ConstraintType, IShape, Shape } from '../lib/Shape';
 import { IStarPatternWithDependencies, Triple } from '../lib/Triple';
-import { ContainmentResult, IContainmentResult, IResult, StarPatternName, solveShapeQueryContainment } from '../lib/containment';
+import { ContainmentResult, IContainmentResult, IResult, StarPatternName, solveShapeQueryContainment, solveShapeShapeContainment } from '../lib/containment';
 import { DataFactory } from 'rdf-data-factory';
 import { BaseQuad } from '@rdfjs/types';
 import { IQuery, generateQuery } from '../lib/query';
-import { TYPE_DEFINITION } from '../lib/constant';
+import { RDF as RDF_VOCAB } from '../lib/constant';
 import type * as RDF from '@rdfjs/types';
 import * as N3 from 'n3';
 import { readFileSync } from 'fs';
@@ -110,7 +110,7 @@ describe('solveShapeQueryContainment', () => {
         const shapeP7: Shape = new Shape({
             name: 'foo7', positivePredicates: [
                 {
-                    name: TYPE_DEFINITION.value,
+                    name: RDF_VOCAB.type,
                     constraint: {
                         value: new Set(['<https://www.example.ca/Type>']),
                         type: ConstraintType.SHAPE
@@ -123,7 +123,7 @@ describe('solveShapeQueryContainment', () => {
         const shapeP8: Shape = new Shape({
             name: 'foo8', positivePredicates: [
                 {
-                    name: TYPE_DEFINITION.value,
+                    name: RDF_VOCAB.type,
                     constraint: {
                         value: new Set(['<https://www.example.ca/Type>']),
                         type: ConstraintType.SHAPE
@@ -708,7 +708,7 @@ describe('solveShapeQueryContainment', () => {
                 name: 'fooClassConstraint',
                 positivePredicates: [
                     {
-                        name: TYPE_DEFINITION.value,
+                        name: RDF_VOCAB.type,
                         constraint: {
                             type: ConstraintType.CLASS,
                             value: new Set(['https://www.example.ca/Person'])
@@ -1005,6 +1005,129 @@ describe('solveShapeQueryContainment', () => {
 
         });
 
+        it('should support shape-to-shape containment through shapeToQuery wrapper', () => {
+            const sourceShape: IShape = new Shape({
+                name: 'https://www.example.ca/source',
+                positivePredicates: [
+                    {
+                        name: RDF_VOCAB.type,
+                        constraint: {
+                            type: ConstraintType.CLASS,
+                            value: new Set(['https://www.example.ca/Person'])
+                        }
+                    },
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
+                            minInclusive: 18,
+                            maxInclusive: 35
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const targetShape: IShape = new Shape({
+                name: 'https://www.example.ca/target',
+                positivePredicates: [
+                    {
+                        name: RDF_VOCAB.type,
+                        constraint: {
+                            type: ConstraintType.CLASS,
+                            value: new Set(['https://www.example.ca/Person'])
+                        }
+                    },
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
+                            minInclusive: 10,
+                            maxInclusive: 40
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const result = solveShapeShapeContainment({
+                sourceShape,
+                targetShapes: [targetShape],
+            });
+
+            expect(result.starPatternsContainment.get(sourceShape.name)?.result).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should support shape-to-shape containment with source linked shapes', () => {
+            const childSource: IShape = new Shape({
+                name: 'https://www.example.ca/sourceChild',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/nickname',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#string']),
+                            pattern: '^a'
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const sourceShape: IShape = new Shape({
+                name: 'https://www.example.ca/sourceRoot',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/knows',
+                        constraint: {
+                            type: ConstraintType.SHAPE,
+                            value: new Set([childSource.name])
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const childTarget: IShape = new Shape({
+                name: childSource.name,
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/nickname',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#string']),
+                            pattern: '^a'
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const targetShape: IShape = new Shape({
+                name: 'https://www.example.ca/targetRoot',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/knows',
+                        constraint: {
+                            type: ConstraintType.SHAPE,
+                            value: new Set([childTarget.name])
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const result = solveShapeShapeContainment({
+                sourceShape,
+                sourceLinkedShapes: [childSource],
+                targetShapes: [targetShape, childTarget],
+            });
+
+            expect(result.starPatternsContainment.get(sourceShape.name)?.result).toBe(ContainmentResult.CONTAINED);
+        });
+
         function generateMatchingQuery(): IQuery {
             const queryString = `
             SELECT * WHERE { 
@@ -1076,15 +1199,15 @@ describe('solveShapeQueryContainment', () => {
                 ?x <https://www.example.ca/p6> ?z .
                 ?x <https://www.example.ca/p5> ?w .
         
-                ?y <${TYPE_DEFINITION.value}> <https://www.example.ca/Type> .
+                ?y <${RDF_VOCAB.type}> <https://www.example.ca/Type> .
         
-                ?z <${TYPE_DEFINITION.value}> <https://www.example.ca/Type> .
+                ?z <${RDF_VOCAB.type}> <https://www.example.ca/Type> .
                 ?z <https://www.example.ca/p0972> <https://www.example.ca/Type> .
                 
                 ?w <https://www.example.ca/p3> ?w1 .
                 ?w <https://www.example.ca/p10> ?w1 .
         
-                ?zz <${TYPE_DEFINITION.value}> <https://www.example.ca/Kipe> .
+                ?zz <${RDF_VOCAB.type}> <https://www.example.ca/Kipe> .
                 ?zz <https://www.example.ca/p0972> <https://www.example.ca/IDK> .
               }
             `;

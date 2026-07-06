@@ -1,51 +1,91 @@
-import type { BaseQuad } from '@rdfjs/types';
-import { DataFactory } from 'rdf-data-factory';
+import type { NamedNode } from '@rdfjs/types';
+import { createUriAndTermNamespace } from '@treecg/types';
 
-export const DF = new DataFactory<BaseQuad>();
+type TermVocabulary<T extends string> = {
+  namespace: NamedNode<string>;
+  custom: (input: string) => NamedNode<string>;
+} & {
+  [K in T]: NamedNode<string>;
+};
 
-export const SHEX_PREDICATE = DF.namedNode('http://www.w3.org/ns/shex#predicate');
-export const SHEX_SHAPE_EXPRESSION = DF.namedNode('http://www.w3.org/ns/shex#shapeExpr');
-export const SHEX_EXPRESSION = DF.namedNode('http://www.w3.org/ns/shex#expression');
-export const SHEX_SHAPE = DF.namedNode('http://www.w3.org/ns/shex#Shape');
-export const SHEX_EXPRESSIONS = DF.namedNode('http://www.w3.org/ns/shex#expressions');
-export const SHEX_CLOSED_SHAPE = DF.namedNode('http://www.w3.org/ns/shex#closed');
-export const SHEX_VALUE_EXPR = DF.namedNode('http://www.w3.org/ns/shex#valueExpr');
-export const SHEX_NODE_KIND = DF.namedNode('http://www.w3.org/ns/shex#nodeKind');
-export const SHEX_MAX = DF.namedNode('http://www.w3.org/ns/shex#max');
-export const SHEX_MIN = DF.namedNode('http://www.w3.org/ns/shex#min');
-export const SHEX_DATA_TYPE = DF.namedNode('http://www.w3.org/ns/shex#datatype');
+type Vocabulary<T extends string> = {
+  namespace: string;
+  custom: (input: string) => string;
+  terms: TermVocabulary<T>;
+} & {
+  [K in T]: string;
+};
 
-export const SHEX_LITERAL = DF.namedNode('http://www.w3.org/ns/shex#literal');
-export const SHEX_IRI = DF.namedNode('http://www.w3.org/ns/shex#iri');
-export const SHEX_BNODE = DF.namedNode('http://www.w3.org/ns/shex#bnode');
-export const SHEX_NON_LITERAL = DF.namedNode('http://www.w3.org/ns/shex#nonliteral');
-export const SHEX_VALUES = DF.namedNode('http://www.w3.org/ns/shex#values');
+function createVocabulary<T extends string>(
+  baseUri: string,
+  ...localNames: T[]
+): Vocabulary<T> {
+  return createUriAndTermNamespace(baseUri, ...localNames) as unknown as Vocabulary<T>;
+}
 
-export const SHEX_EACH_OF = DF.namedNode("http://www.w3.org/ns/shex#EachOf");
-export const SHEX_ONE_OF = DF.namedNode("http://www.w3.org/ns/shex#OneOf");
+export const SHACL = createVocabulary(
+  "http://www.w3.org/ns/shacl#",
+  "property",
+  "path",
+  "minCount",
+  "maxCount",
+  "minInclusive",
+  "maxInclusive",
+  "minExclusive",
+  "maxExclusive",
+  "pattern",
+  "flags",
+  "closed",
+  "class",
+  "datatype",
+  "node",
+  "or",
+  "xone",
+  "not"
+);
 
-export const TYPE_DEFINITION = DF.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#type');
-export const IRI_FIRST_RDF_LIST = DF.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#first');
-export const IRI_REST_RDF_LIST = DF.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#rest');
-export const IRI_END_RDF_LIST = DF.namedNode('http://www.w3.org/1999/02/22-rdf-syntax-ns#nil');
-export const XSD_BOOLEAN = DF.namedNode('http://www.w3.org/2001/XMLSchema#boolean');
-export const RDF_TRUE = DF.literal('true', XSD_BOOLEAN);
+export const SHEX = createVocabulary(
+  "http://www.w3.org/ns/shex#",
+  "predicate",
+  "shapeExpr",
+  "expression",
+  "Shape",
+  "expressions",
+  "closed",
+  "valueExpr",
+  "nodeKind",
+  "max",
+  "min",
+  "datatype",
+  "mininclusive",
+  "maxinclusive",
+  "minexclusive",
+  "maxexclusive",
+  "pattern",
+  "flags",
+  "literal",
+  "iri",
+  "bnode",
+  "nonliteral",
+  "values",
+  "EachOf",
+  "OneOf"
+);
 
-export const SHACL_SH = 'http://www.w3.org/ns/shacl#';
-export const SHACL_PROPERTY = DF.namedNode(`${SHACL_SH}property`);
-export const SHACL_PATH = DF.namedNode(`${SHACL_SH}path`);
-export const SHACL_MIN_COUNT = DF.namedNode(`${SHACL_SH}minCount`);
-export const SHACL_MAX_COUNT = DF.namedNode(`${SHACL_SH}maxCount`);
-export const SHACL_MIN_INCLUSIVE = DF.namedNode(`${SHACL_SH}minInclusive`);
-export const SHACL_MAX_INCLUSIVE = DF.namedNode(`${SHACL_SH}maxInclusive`);
-export const SHACL_MIN_EXCLUSIVE = DF.namedNode(`${SHACL_SH}minExclusive`);
-export const SHACL_MAX_EXCLUSIVE = DF.namedNode(`${SHACL_SH}maxExclusive`);
-export const SHACL_PATTERN = DF.namedNode(`${SHACL_SH}pattern`);
-export const SHACL_FLAGS = DF.namedNode(`${SHACL_SH}flags`);
-export const SHACL_CLOSED = DF.namedNode(`${SHACL_SH}closed`);
-export const SHACL_CLASS = DF.namedNode(`${SHACL_SH}class`);
-export const SHACL_DATATYPE = DF.namedNode(`${SHACL_SH}datatype`);
-export const SHACL_NODE = DF.namedNode(`${SHACL_SH}node`);
-export const SHACL_OR = DF.namedNode(`${SHACL_SH}or`);
-export const SHACL_XONE = DF.namedNode(`${SHACL_SH}xone`);
-export const SHACL_NOT = DF.namedNode(`${SHACL_SH}not`);
+export const RDF = createVocabulary(
+  "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+  "type",
+  "first",
+  "rest",
+  "nil"
+);
+
+export const XSD = createVocabulary(
+  "http://www.w3.org/2001/XMLSchema#",
+  "string",
+  "boolean",
+  "decimal",
+  "integer",
+  "float",
+  "double"
+);

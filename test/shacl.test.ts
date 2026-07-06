@@ -4,7 +4,7 @@ import * as N3 from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { describe, expect, it } from 'vitest';
 import { streamifyArray } from 'streamify-array';
-import { TYPE_DEFINITION } from '../lib/constant';
+import { RDF as RDF_VOCAB } from '../lib/constant';
 import { ConstraintType, type IConstraint, type OneOf, type IShape } from '../lib/Shape';
 import { shaclShapeFromQuads } from '../lib/shacl';
 
@@ -362,7 +362,7 @@ describe.each([
       expect(shape).not.toBeInstanceOf(Error);
 
       const expectedPredicates = new Set([
-        TYPE_DEFINITION.value,
+        RDF_VOCAB.type,
         `${LBDCVOC_PREFIX}id`,
         `${LBDCVOC_PREFIX}creationDate`,
         `${LBDCVOC_PREFIX}locationIP`,
@@ -375,7 +375,7 @@ describe.each([
       ]);
 
       const mapCardinality = new Map([
-        [TYPE_DEFINITION.value, { min: 0, max: 1 }],
+        [RDF_VOCAB.type, { min: 0, max: 1 }],
         [`${LBDCVOC_PREFIX}id`, { min: 1, max: 1 }],
         [`${LBDCVOC_PREFIX}creationDate`, { min: 1, max: 1 }],
         [`${LBDCVOC_PREFIX}locationIP`, { min: 1, max: 1 }],
@@ -388,7 +388,7 @@ describe.each([
       ]);
 
       const mapConstraint = new Map<string, IConstraint | undefined>([
-        [TYPE_DEFINITION.value, { type: ConstraintType.CLASS, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
+        [RDF_VOCAB.type, { type: ConstraintType.CLASS, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
         [`${LBDCVOC_PREFIX}id`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}long`]) }],
         [`${LBDCVOC_PREFIX}creationDate`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}dateTime`]) }],
         [`${LBDCVOC_PREFIX}locationIP`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],

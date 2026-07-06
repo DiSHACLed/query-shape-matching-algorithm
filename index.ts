@@ -6,3 +6,4 @@ export * from './lib/containment';
 export * from './lib/Shape';
 export * from './lib/Triple';
 export * from './lib/Binding';
+export * from './lib/parser-policy';

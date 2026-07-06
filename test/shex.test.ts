@@ -4,7 +4,7 @@ import * as N3 from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { describe, expect, it } from 'vitest';
 import { streamifyArray } from 'streamify-array';
-import { SHEX_SHAPE, TYPE_DEFINITION, SHEX_PREDICATE } from '../lib/constant';
+import { RDF as RDF_VOCAB, SHEX } from '../lib/constant';
 import { ConstraintType, IConstraint, OneOf, type IShape } from '../lib/Shape';
 import { shexShapeFromQuads } from '../lib/shex';
 
@@ -34,12 +34,12 @@ describe.each([
       ),
       DF.quad(
         DF.namedNode('a'),
-        TYPE_DEFINITION,
-        SHEX_SHAPE,
+        RDF_VOCAB.terms.type,
+        SHEX.terms.Shape,
       ),
       DF.quad(
         DF.namedNode('a'),
-        SHEX_PREDICATE,
+        SHEX.terms.predicate,
         DF.blankNode(),
       ),
     ] as RDF.Quad[]),
@@ -73,7 +73,7 @@ describe.each([
     it(`${name}: should handle Comment`, async () => {
       const shape = await shexShapeFromQuads(shapeSolidBenchComment, "http://example.com#Comment");
       const expectedPredicates: string[] = [
-        TYPE_DEFINITION.value,
+        RDF_VOCAB.type,
         `${LBDCVOC_PREFIX}id`,
         `${LBDCVOC_PREFIX}creationDate`,
         `${LBDCVOC_PREFIX}locationIP`,
@@ -86,7 +86,7 @@ describe.each([
       ];
 
       const mapCardinality = new Map([
-        [TYPE_DEFINITION.value, { min: 0, max: 1 }],
+        [RDF_VOCAB.type, { min: 0, max: 1 }],
         [`${LBDCVOC_PREFIX}id`, { min: 1, max: 1 }],
         [`${LBDCVOC_PREFIX}creationDate`, { min: 1, max: 1 }],
         [`${LBDCVOC_PREFIX}locationIP`, { min: 1, max: 1 }],
@@ -99,7 +99,7 @@ describe.each([
       ]);
 
       const mapConstraint = new Map<string, IConstraint | undefined>([
-        [TYPE_DEFINITION.value, { type: ConstraintType.CLASS, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
+        [RDF_VOCAB.type, { type: ConstraintType.CLASS, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
         [`${LBDCVOC_PREFIX}id`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}long`]) }],
         [`${LBDCVOC_PREFIX}creationDate`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}dateTime`]) }],
         [`${LBDCVOC_PREFIX}locationIP`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],
@@ -165,6 +165,33 @@ describe.each([
     expect((shape as IShape).negativePredicates).toStrictEqual([]);
     expect((shape as IShape).closed).toBe(false);
     expect((shape as IShape).name).toBe(shapeIri);
+  });
+
+  it(`${name}: should parse datatype numeric and regex facets into IConstraint`, async () => {
+    const shapeWithFacets: any = populateFunction([
+      DF.quad(DF.namedNode(shapeIri), RDF_VOCAB.terms.type, SHEX.terms.Shape),
+      DF.quad(DF.namedNode(shapeIri), SHEX.terms.expression, DF.blankNode('expr1')),
+      DF.quad(DF.blankNode('expr1'), SHEX.terms.predicate, DF.namedNode('http://example.org/age')),
+      DF.quad(DF.blankNode('expr1'), SHEX.terms.valueExpr, DF.blankNode('constraint1')),
+      DF.quad(DF.blankNode('constraint1'), SHEX.terms.datatype, DF.namedNode('http://www.w3.org/2001/XMLSchema#integer')),
+      DF.quad(DF.blankNode('constraint1'), SHEX.terms.mininclusive, DF.literal('18', DF.namedNode('http://www.w3.org/2001/XMLSchema#integer'))),
+      DF.quad(DF.blankNode('constraint1'), SHEX.terms.maxexclusive, DF.literal('65', DF.namedNode('http://www.w3.org/2001/XMLSchema#integer'))),
+      DF.quad(DF.blankNode('constraint1'), SHEX.terms.pattern, DF.literal('^foo')),
+      DF.quad(DF.blankNode('constraint1'), SHEX.terms.flags, DF.literal('i')),
+    ] as RDF.Quad[]);
+
+    const shape = await shexShapeFromQuads(shapeWithFacets, shapeIri);
+    expect(shape).not.toBeInstanceOf(Error);
+
+    const predicate = (shape as IShape).get('http://example.org/age');
+    expect(predicate?.constraint).toStrictEqual({
+      type: ConstraintType.DATATYPE,
+      value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
+      minInclusive: 18,
+      maxExclusive: 65,
+      pattern: '^foo',
+      flags: 'i',
+    });
   });
 
   it(`${name}: should returns a closed Shape with multiple properties`, async () => {

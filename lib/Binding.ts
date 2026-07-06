@@ -1,6 +1,6 @@
 import { ConstraintType, IConstraint, IPredicate, IShape, OneOfPathIndexed } from "./Shape";
 import { IStarPatternWithDependencies, type ITriple, Triple } from "./Triple";
-import { TYPE_DEFINITION } from "./constant";
+import { RDF } from "./constant";
 
 /**
  * A binding from a query to a shape
@@ -356,20 +356,20 @@ export class Bindings implements IBindings {
         constraint: IConstraint,
         triple: ITriple): ConstraintResult {
         if (constraint.type === ConstraintType.CLASS &&
-            triple.predicate === TYPE_DEFINITION.value &&
+            triple.predicate === RDF.type &&
             !Array.isArray(triple.object) &&
             triple.object.termType === "NamedNode"
             && constraint.value.has(triple.object.value)) {
             return ConstraintResult.RESPECT;
 
         } else if (constraint.type === ConstraintType.CLASS &&
-            triple.predicate === TYPE_DEFINITION.value &&
+            triple.predicate === RDF.type &&
             !Array.isArray(triple.object) &&
             triple.object.termType === "NamedNode"
             && !constraint.value.has(triple.object.value)) {
             return ConstraintResult.NOT_RESPECT;
         } else if (constraint.type === ConstraintType.CLASS &&
-            triple.predicate === TYPE_DEFINITION.value &&
+            triple.predicate === RDF.type &&
             Array.isArray(triple.object)) {
             for (const object of triple.object) {
                 if (constraint.value.has(object.value)) {
@@ -377,7 +377,7 @@ export class Bindings implements IBindings {
                 }
             }
             return ConstraintResult.NOT_RESPECT;
-        } else if (constraint.type === ConstraintType.CLASS && triple.predicate !== TYPE_DEFINITION.value) {
+        } else if (constraint.type === ConstraintType.CLASS && triple.predicate !== RDF.type) {
             return ConstraintResult.NOT_RESPECT;
         }
 

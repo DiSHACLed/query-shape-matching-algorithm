@@ -1,5 +1,5 @@
 import { Bindings, ContainmentType, IBindings } from './Binding'
-import { generateStarPatternUnion, type IQuery } from './query';
+import { generateStarPatternUnion, shapeToQuery, type IQuery } from './query';
 import { ConstraintType, IConstraint, IShape } from './Shape';
 import type { IStarPatternWithDependencies } from './Triple';
 import type { Term } from '@rdfjs/types';
@@ -76,6 +76,24 @@ export function solveShapeQueryContainment({ query, shapes, decidingShapes }: IC
     visitShapeBoundedResource: generateVisitStatus(bindingResult, shapes)
   };
 
+}
+
+export interface IShapeContainmentArg {
+  sourceShape: IShape;
+  sourceLinkedShapes?: IShape[] | Map<string, IShape>;
+  targetShapes: IShape[];
+  decidingShapes?: Set<string>;
+}
+
+/**
+ * Convenience wrapper to compare a source shape against candidate target shapes.
+ *
+ * Internally this translates the source shape into a best-effort query and then
+ * delegates to the standard query-to-shape containment solver.
+ */
+export function solveShapeShapeContainment({ sourceShape, sourceLinkedShapes, targetShapes, decidingShapes }: IShapeContainmentArg): IResult {
+  const query = shapeToQuery(sourceShape, { linkedShapes: sourceLinkedShapes });
+  return solveShapeQueryContainment({ query, shapes: targetShapes, decidingShapes });
 }
 
 function updateContainmentStats(

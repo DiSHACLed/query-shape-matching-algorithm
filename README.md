@@ -82,6 +82,62 @@ const shexQuads = /* RDF quads from ShEx definition */;
 const personShape = await shexShapeFromQuads(shexQuads, "http://example.org/PersonShape");
 ```
 
+### Shape-to-Shape Example
+
+You can compare a source shape against candidate target shapes directly using
+`solveShapeShapeContainment`. Internally, this uses a best-effort shape-to-query
+translation and then reuses the existing query-to-shape containment engine.
+
+```ts
+import {
+  Shape,
+  ConstraintType,
+  solveShapeShapeContainment,
+} from 'query-shape-detection';
+
+const sourceShape = new Shape({
+  name: 'https://www.example.ca/source',
+  positivePredicates: [
+    {
+      name: 'https://www.example.ca/age',
+      constraint: {
+        type: ConstraintType.DATATYPE,
+        value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
+        minInclusive: 18,
+        maxInclusive: 35,
+      },
+    },
+  ],
+  closed: true,
+});
+
+const targetShape = new Shape({
+  name: 'https://www.example.ca/target',
+  positivePredicates: [
+    {
+      name: 'https://www.example.ca/age',
+      constraint: {
+        type: ConstraintType.DATATYPE,
+        value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
+        minInclusive: 10,
+        maxInclusive: 40,
+      },
+    },
+  ],
+  closed: true,
+});
+
+const report = solveShapeShapeContainment({
+  sourceShape,
+  targetShapes: [targetShape],
+});
+
+console.log(report.starPatternsContainment.get(sourceShape.name));
+```
+
+For source shapes with nested `sh:node` / shape-link constraints, pass their linked
+definitions in `sourceLinkedShapes`.
+
 ## Containment Results
 
 The library returns a report where each star pattern is assigned one of the following `ContainmentResult` values:
