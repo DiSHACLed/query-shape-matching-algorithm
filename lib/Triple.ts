@@ -7,7 +7,6 @@ import { ICardinality } from './Shape';
 export interface IStarPatternWithDependencies {
   // indexed by predicate
   starPattern: Map<string, ITripleWithDependencies>;
-  filterExpression?: string;
   name: string;
   isVariable: boolean;
 }

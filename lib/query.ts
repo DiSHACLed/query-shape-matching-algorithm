@@ -29,7 +29,10 @@ export interface IQuery {
   // star patterns indexed by subject
   starPatterns: Map<string, IStarPatternWithDependencies>;
   union?: IQuery[][];
-  filterExpression?: string;
+  // top-level filter expressions attached to this query branch
+  filters?: Algebra.Expression[];
+  // VALUES bindings indexed by variable name
+  values?: Map<string, Term[]>;
 }
 
 export function generateStarPatternUnion(union: IQuery[][], starPatternName: string): IStarPatternWithDependencies[][] {
@@ -60,21 +63,29 @@ export function generateQuery(algebraQuery: Algebra.Operation, optional?: boolea
   // the binding value to the value
   const accumulatedValues = new Map<string, Term[]>();
   const accumulatedUnion: IQuery[][] = [];
+  const accumulatedFilters: Algebra.Expression[] = [];
 
-  QueryHandler.collectFromAlgebra(algebraQuery, accumulatedTriples, accumulatedValues, accumulatedUnion, optional);
+  QueryHandler.collectFromAlgebra(algebraQuery, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, optional);
 
-  return buildQuery(accumulatedTriples, accumulatedValues, accumulatedUnion);
+  return buildQuery(accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters);
 }
 
 function buildQuery(
   tripleArgs: Map<string, IAccumulatedTriples>,
   values: Map<string, Term[]>,
-  accumulatedUnion: IQuery[][]
+  accumulatedUnion: IQuery[][],
+  filters: Algebra.Expression[] = [],
 ): IQuery {
   const innerQuery = new Map<string, IStarPatternWithDependencies>();
-  const resp: IQuery = { starPatterns: innerQuery, filterExpression: "" };
+  const resp: IQuery = { starPatterns: innerQuery };
   if (accumulatedUnion.length > 0) {
     resp.union = accumulatedUnion;
+  }
+  if (filters.length > 0) {
+    resp.filters = [...filters];
+  }
+  if (values.size > 0) {
+    resp.values = new Map(values);
   }
 
   // generate the root star patterns
@@ -194,6 +205,7 @@ namespace QueryHandler {
     accumulatedTriples: Map<string, IAccumulatedTriples>,
     accumulatedValues: Map<string, Term[]>,
     accumulatedUnion: IQuery[][],
+    accumulatedFilters: Algebra.Expression[],
     optional?: boolean
   ): void {
     algebraUtils.visitOperation(
@@ -213,13 +225,14 @@ namespace QueryHandler {
         },
         [Algebra.Types.LEFT_JOIN]: {
           preVisitor: () => ({ continue: false }),
-          visitor: handleLeftJoin(accumulatedTriples, accumulatedValues, accumulatedUnion),
+          visitor: handleLeftJoin(accumulatedTriples, accumulatedValues, accumulatedFilters, accumulatedUnion),
         },
         [Algebra.Types.PATH]: {
           preVisitor: () => ({ continue: false }),
           visitor: handlePropertyPath(accumulatedTriples, accumulatedUnion, accumulatedValues, optional),
         },
         [Algebra.Types.FILTER]: {
+          visitor: handleFilter(accumulatedFilters),
           // Ignore the expression subtree for now (e.g. FILTER NOT EXISTS) to avoid collecting
           // inner patterns that belong to the filter condition, not the query body.
           preVisitor: () => ({ ignoreKeys: new Set(['expression']) }),
@@ -230,14 +243,21 @@ namespace QueryHandler {
 
   function handleLeftJoin(accumulatedTriples: Map<string, IAccumulatedTriples>,
     accumulatedValues: Map<string, Term[]>,
+    accumulatedFilters: Algebra.Expression[],
     accumulatedUnion: IQuery[][]): (element: Algebra.LeftJoin) => void {
     return (element: Algebra.LeftJoin): void => {
       const joinElement = element.input;
       const requiredElements = joinElement[0];
       const optionalElements = joinElement[1];
 
-      collectFromAlgebra(requiredElements, accumulatedTriples, accumulatedValues, accumulatedUnion);
-      collectFromAlgebra(optionalElements, accumulatedTriples, accumulatedValues, accumulatedUnion, true);
+      collectFromAlgebra(requiredElements, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters);
+      collectFromAlgebra(optionalElements, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, true);
+    }
+  }
+
+  function handleFilter(accumulatedFilters: Algebra.Expression[]): (element: Algebra.Filter) => void {
+    return (element: Algebra.Filter): void => {
+      accumulatedFilters.push(element.expression);
     }
   }
 

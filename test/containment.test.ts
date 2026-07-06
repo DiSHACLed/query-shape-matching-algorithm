@@ -306,6 +306,302 @@ describe('solveShapeQueryContainment', () => {
             expect(solveShapeQueryContainment({ query, shapes: [closedShape] })).toStrictEqual(expectedResult);
         });
 
+        it('should keep containment when FILTER is statically true', () => {
+            const queryString = `
+            SELECT * WHERE {
+              ?x <https://www.example.ca/p0> ?y .
+              FILTER(true)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shapes: IShape[] = [shape];
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment when FILTER is statically false on closed shapes', () => {
+            const queryString = `
+            SELECT * WHERE {
+              ?x <https://www.example.ca/p0> ?y .
+              FILTER(false)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shapes: IShape[] = [shape];
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment when FILTER is statically false on open shapes', () => {
+            const openShape: IShape = new Shape({
+                name: 'fooOpenFilter',
+                positivePredicates: [
+                    'https://www.example.ca/p0'
+                ],
+                closed: false
+            });
+
+            const queryString = `
+            SELECT * WHERE {
+              ?x <https://www.example.ca/p0> ?y .
+              FILTER(false)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [openShape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [openShape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [openShape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should support FILTER regex(str(?v), pattern) with VALUES', () => {
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?x ex:p0 ?v .
+              VALUES ?v { "foobar" }
+              FILTER(regex(str(?v), "foo"))
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shapes: IShape[] = [shape];
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment when FILTER regex(str(?v), pattern) is false with VALUES', () => {
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?x ex:p0 ?v .
+              VALUES ?v { "foobar" }
+              FILTER(regex(str(?v), "^bar"))
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shapes: IShape[] = [shape];
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+        });
+
+        it('should support FILTER datatype(?v) comparison with VALUES', () => {
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            SELECT * WHERE {
+              ?x ex:p0 ?v .
+              VALUES ?v { "42"^^xsd:integer }
+              FILTER(datatype(?v) = xsd:integer)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shapes: IShape[] = [shape];
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment for age values in the (18, 35] range', () => {
+            const constrainedShape: IShape = new Shape({
+                name: 'fooAgeRange',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.TYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer'])
+                        }
+                    }
+                ],
+                closed: true
+            });
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            SELECT * WHERE {
+              ?x ex:age ?age .
+                            VALUES ?age { "21"^^xsd:integer }
+                            FILTER(?age > 18 && ?age <= 35)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [constrainedShape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [constrainedShape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment when FILTER value branch fails but datatype constraint is compatible', () => {
+            const constrainedShape: IShape = new Shape({
+                name: 'fooAgeRange',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.TYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer'])
+                        }
+                    }
+                ],
+                closed: true
+            });
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            SELECT * WHERE {
+              ?x ex:age ?age .
+                            VALUES ?age { "17"^^xsd:integer }
+                            FILTER(?age > 18 && ?age <= 35)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [constrainedShape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [constrainedShape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment when FILTER upper-bound branch fails but datatype constraint is compatible', () => {
+            const constrainedShape: IShape = new Shape({
+                name: 'fooAgeRange',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.TYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer'])
+                        }
+                    }
+                ],
+                closed: true
+            });
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            SELECT * WHERE {
+              ?x ex:age ?age .
+              VALUES ?age { "40"^^xsd:integer }
+              FILTER(?age > 18 && ?age <= 35)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [constrainedShape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [constrainedShape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should reject when numeric FILTER contradicts non-numeric shape datatype constraint', () => {
+            const constrainedShape: IShape = new Shape({
+                name: 'fooAgeString',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.TYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#string'])
+                        }
+                    }
+                ],
+                closed: true
+            });
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?x ex:age ?age .
+              FILTER(?age > 18)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.REJECTED, bindings: new Map() }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [constrainedShape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [constrainedShape] })).toStrictEqual(expectedResult);
+        });
+
         it('should handle a query contained in every shape', () => {
             const query = generateMatchingQuery();
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];

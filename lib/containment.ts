@@ -1,7 +1,8 @@
 import { Bindings, ContainmentType, IBindings } from './Binding'
 import { generateStarPatternUnion, type IQuery } from './query';
-import { IShape } from './Shape';
+import { ConstraintType, IShape } from './Shape';
 import type { IStarPatternWithDependencies } from './Triple';
+import type { Term } from '@rdfjs/types';
 
 /**
  * Determine if a query is contained inside a shape.
@@ -35,8 +36,9 @@ export function solveShapeQueryContainment({ query, shapes, decidingShapes }: IC
     for (const [starPatternName, starPattern] of query.starPatterns) {
       const starPatternUnion = generateStarPatternUnion(query.union ?? [], starPatternName);
       const bindings = new Bindings(shape, starPattern, dependencies, starPatternUnion);
+      const filterCompatibility = evaluateFiltersForShape(query.filters, starPattern, shape);
       bindingResultofShape.set(starPatternName, { result: bindings, shape });
-      updateContainmentStats(classificationStats, starPatternName, shape, bindings, groupedShapes, decidingShapes);
+      updateContainmentStats(classificationStats, starPatternName, shape, bindings, groupedShapes, decidingShapes, filterCompatibility !== FilterTruth.FALSE);
     }
   }
 
@@ -47,25 +49,23 @@ export function solveShapeQueryContainment({ query, shapes, decidingShapes }: IC
     const containedTargets = Array.from(stats.containedTargets);
     const nestedTargets = Array.from(getNestedMatchingTargets(starPattern, classificationStats));
 
+    let currentResult: IContainmentResult;
     if (containedTargets.length > 0) {
-      starPatternsContainment.set(starPatternName, { result: ContainmentResult.CONTAINED, target: containedTargets, bindings: new Map(stats.bindings) });
-      continue;
+      currentResult = { result: ContainmentResult.CONTAINED, target: containedTargets, bindings: new Map(stats.bindings) };
+    } else if (rootTargetsOpen.length > 0) {
+      currentResult = { result: ContainmentResult.ALIGNED, target: rootTargetsOpen, bindings: new Map(stats.bindings) };
+    } else {
+      const unalignedTargets = Array.from(new Set(rootTargetsClosed.concat(nestedTargets)));
+      if (unalignedTargets.length > 0) {
+        const bindings = rootTargetsClosed.length > 0 ? new Map(stats.bindings) : new Map();
+        currentResult = { result: ContainmentResult.UNALINGED, target: unalignedTargets, bindings };
+      } else {
+        const rejectedResult = stats.hasOpenShape ? ContainmentResult.WEAKLY_REJECTED : ContainmentResult.REJECTED;
+        currentResult = { result: rejectedResult, bindings: new Map() };
+      }
     }
 
-    if (rootTargetsOpen.length > 0) {
-      starPatternsContainment.set(starPatternName, { result: ContainmentResult.ALIGNED, target: rootTargetsOpen, bindings: new Map(stats.bindings) });
-      continue;
-    }
-
-    const unalignedTargets = Array.from(new Set(rootTargetsClosed.concat(nestedTargets)));
-    if (unalignedTargets.length > 0) {
-      const bindings = rootTargetsClosed.length > 0 ? new Map(stats.bindings) : new Map();
-      starPatternsContainment.set(starPatternName, { result: ContainmentResult.UNALINGED, target: unalignedTargets, bindings });
-      continue;
-    }
-
-    const rejectedResult = stats.hasOpenShape ? ContainmentResult.WEAKLY_REJECTED : ContainmentResult.REJECTED;
-    starPatternsContainment.set(starPatternName, { result: rejectedResult, bindings: new Map() });
+    starPatternsContainment.set(starPatternName, currentResult);
   }
 
   return {
@@ -82,6 +82,7 @@ function updateContainmentStats(
   bindings: IBindings,
   groupedShapes: IShapeWithDependencies[],
   decidingShapes?: Set<string>,
+  filterCompatible = true,
 ): void {
   if (decidingShapes !== undefined && !decidingShapes.has(shape.name)) {
     return;
@@ -92,6 +93,10 @@ function updateContainmentStats(
     stats.hasClosedShape = true;
   } else {
     stats.hasOpenShape = true;
+  }
+
+  if (!filterCompatible) {
+    return;
   }
 
   const hasRootMatch = bindings.getBoundTriple().length > 0;
@@ -173,6 +178,266 @@ function getNestedDependencyNames(starPattern: IStarPatternWithDependencies, vis
   }
 
   return nestedNames;
+}
+
+enum FilterTruth {
+  TRUE = 'true',
+  FALSE = 'false',
+  UNKNOWN = 'unknown',
+}
+
+interface IFilterEvalContext {
+  starPattern: IStarPatternWithDependencies;
+  shape: IShape;
+}
+
+function evaluateFiltersForShape(
+  filters: unknown[] | undefined,
+  starPattern: IStarPatternWithDependencies,
+  shape: IShape,
+): FilterTruth {
+  if (filters === undefined || filters.length === 0) {
+    return FilterTruth.UNKNOWN;
+  }
+
+  const context: IFilterEvalContext = { starPattern, shape };
+  let status = FilterTruth.UNKNOWN;
+  for (const filter of filters) {
+    const result = evaluateFilterCompatibility(filter, context);
+    if (result === FilterTruth.FALSE) {
+      return FilterTruth.FALSE;
+    }
+    if (result === FilterTruth.TRUE) {
+      status = FilterTruth.TRUE;
+    }
+  }
+  return status;
+}
+
+function evaluateFilterCompatibility(expression: unknown, context: IFilterEvalContext): FilterTruth {
+  if (typeof expression !== 'object' || expression === null) {
+    return FilterTruth.UNKNOWN;
+  }
+
+  const castExpression = expression as { subType?: string; operator?: string; args?: unknown[] };
+  if (castExpression.subType === 'term') {
+    // Boolean literals like FILTER(true/false) are intentionally ignored for containment.
+    return FilterTruth.UNKNOWN;
+  }
+  if (castExpression.subType !== 'operator') {
+    return FilterTruth.UNKNOWN;
+  }
+
+  const args = castExpression.args ?? [];
+  switch (castExpression.operator) {
+    case '&&':
+      return combineLogicalAnd(args, context);
+    case '||':
+      return combineLogicalOr(args, context);
+    case '!': {
+      // Negation does not provide a safe contradiction signal in this conservative check.
+      return FilterTruth.UNKNOWN;
+    }
+    case '=':
+    case '!=':
+    case '<':
+    case '<=':
+    case '>':
+    case '>=':
+      return evaluateComparisonCompatibility(castExpression.operator, args[0], args[1], context);
+    default:
+      return FilterTruth.UNKNOWN;
+  }
+}
+
+function combineLogicalAnd(args: unknown[], context: IFilterEvalContext): FilterTruth {
+  let hasTrue = false;
+  for (const arg of args) {
+    const current = evaluateFilterCompatibility(arg, context);
+    if (current === FilterTruth.FALSE) {
+      return FilterTruth.FALSE;
+    }
+    if (current === FilterTruth.TRUE) {
+      hasTrue = true;
+    }
+  }
+  return hasTrue ? FilterTruth.TRUE : FilterTruth.UNKNOWN;
+}
+
+function combineLogicalOr(args: unknown[], context: IFilterEvalContext): FilterTruth {
+  let hasNonFalse = false;
+  for (const arg of args) {
+    const current = evaluateFilterCompatibility(arg, context);
+    if (current !== FilterTruth.FALSE) {
+      hasNonFalse = true;
+    }
+  }
+  return hasNonFalse ? FilterTruth.UNKNOWN : FilterTruth.FALSE;
+}
+
+function evaluateComparisonCompatibility(operator: string, left: unknown, right: unknown, context: IFilterEvalContext): FilterTruth {
+  const datatypeCheck = evaluateDatatypeCompatibility(operator, left, right, context)
+    ?? evaluateDatatypeCompatibility(operator, right, left, context);
+  if (datatypeCheck !== undefined) {
+    return datatypeCheck;
+  }
+
+  if (operator === '<' || operator === '<=' || operator === '>' || operator === '>=') {
+    const numericCheck = evaluateNumericComparisonCompatibility(left, right, context)
+      ?? evaluateNumericComparisonCompatibility(right, left, context);
+    if (numericCheck !== undefined) {
+      return numericCheck;
+    }
+  }
+
+  return FilterTruth.UNKNOWN;
+}
+
+function evaluateNumericComparisonCompatibility(variableExpr: unknown, otherExpr: unknown, context: IFilterEvalContext): FilterTruth | undefined {
+  const variableName = extractVariableName(variableExpr);
+  if (variableName === undefined) {
+    return undefined;
+  }
+
+  const literal = extractLiteral(otherExpr);
+  if (literal === undefined || getNumericLiteralValue(literal) === undefined) {
+    return FilterTruth.UNKNOWN;
+  }
+
+  const datatypes = extractVariableDatatypes(variableName, context);
+  if (datatypes === undefined) {
+    return FilterTruth.UNKNOWN;
+  }
+
+  for (const datatype of datatypes) {
+    if (isNumericDatatype(datatype)) {
+      return FilterTruth.UNKNOWN;
+    }
+  }
+  return FilterTruth.FALSE;
+}
+
+function evaluateDatatypeCompatibility(operator: string, datatypeExpr: unknown, otherExpr: unknown, context: IFilterEvalContext): FilterTruth | undefined {
+  const variableName = extractDatatypeVariableName(datatypeExpr);
+  if (variableName === undefined) {
+    return undefined;
+  }
+
+  const expectedDatatype = extractNamedNodeValue(otherExpr);
+  if (expectedDatatype === undefined) {
+    return FilterTruth.UNKNOWN;
+  }
+
+  const datatypes = extractVariableDatatypes(variableName, context);
+  if (datatypes === undefined) {
+    return FilterTruth.UNKNOWN;
+  }
+
+  if (operator === '=' && !datatypes.has(expectedDatatype)) {
+    return FilterTruth.FALSE;
+  }
+  if (operator === '!=' && datatypes.size === 1 && datatypes.has(expectedDatatype)) {
+    return FilterTruth.FALSE;
+  }
+  return FilterTruth.UNKNOWN;
+}
+
+function extractVariableDatatypes(variableName: string, context: IFilterEvalContext): Set<string> | undefined {
+  let collected: Set<string> | undefined;
+  for (const { triple } of context.starPattern.starPattern.values()) {
+    if (Array.isArray(triple.object) || triple.object.termType !== 'Variable' || triple.object.value !== variableName) {
+      continue;
+    }
+    const predicateConstraint = context.shape.get(triple.predicate)?.constraint;
+    if (predicateConstraint?.type !== ConstraintType.TYPE || predicateConstraint.value.size === 0) {
+      continue;
+    }
+    if (collected === undefined) {
+      collected = new Set(predicateConstraint.value);
+      continue;
+    }
+    collected = new Set(Array.from(collected).filter((value) => predicateConstraint.value.has(value)));
+  }
+
+  return collected;
+}
+
+function extractVariableName(expression: unknown): string | undefined {
+  if (typeof expression !== 'object' || expression === null) {
+    return undefined;
+  }
+  const castExpression = expression as { subType?: string; term?: Term };
+  if (castExpression.subType !== 'term' || castExpression.term === undefined || castExpression.term.termType !== 'Variable') {
+    return undefined;
+  }
+  return castExpression.term.value;
+}
+
+function extractDatatypeVariableName(expression: unknown): string | undefined {
+  if (typeof expression !== 'object' || expression === null) {
+    return undefined;
+  }
+  const castExpression = expression as { subType?: string; operator?: string; args?: unknown[] };
+  if (castExpression.subType !== 'operator' || castExpression.operator !== 'datatype') {
+    return undefined;
+  }
+  return extractVariableName((castExpression.args ?? [])[0]);
+}
+
+function extractLiteral(expression: unknown): Term | undefined {
+  if (typeof expression !== 'object' || expression === null) {
+    return undefined;
+  }
+  const castExpression = expression as { subType?: string; term?: Term };
+  if (castExpression.subType !== 'term' || castExpression.term === undefined || castExpression.term.termType !== 'Literal') {
+    return undefined;
+  }
+  return castExpression.term;
+}
+
+function extractNamedNodeValue(expression: unknown): string | undefined {
+  if (typeof expression !== 'object' || expression === null) {
+    return undefined;
+  }
+  const castExpression = expression as { subType?: string; term?: Term };
+  if (castExpression.subType !== 'term' || castExpression.term === undefined || castExpression.term.termType !== 'NamedNode') {
+    return undefined;
+  }
+  return castExpression.term.value;
+}
+
+function getNumericLiteralValue(term: Term): number | undefined {
+  if (term.termType !== 'Literal') {
+    return undefined;
+  }
+  if (!isNumericDatatype(term.datatype.value)) {
+    return undefined;
+  }
+
+  const value = Number(term.value);
+  return Number.isNaN(value) ? undefined : value;
+}
+
+function isNumericDatatype(datatype: string): boolean {
+  const numericDatatypes = new Set([
+    'http://www.w3.org/2001/XMLSchema#integer',
+    'http://www.w3.org/2001/XMLSchema#decimal',
+    'http://www.w3.org/2001/XMLSchema#double',
+    'http://www.w3.org/2001/XMLSchema#float',
+    'http://www.w3.org/2001/XMLSchema#nonNegativeInteger',
+    'http://www.w3.org/2001/XMLSchema#nonPositiveInteger',
+    'http://www.w3.org/2001/XMLSchema#positiveInteger',
+    'http://www.w3.org/2001/XMLSchema#negativeInteger',
+    'http://www.w3.org/2001/XMLSchema#long',
+    'http://www.w3.org/2001/XMLSchema#int',
+    'http://www.w3.org/2001/XMLSchema#short',
+    'http://www.w3.org/2001/XMLSchema#byte',
+    'http://www.w3.org/2001/XMLSchema#unsignedLong',
+    'http://www.w3.org/2001/XMLSchema#unsignedInt',
+    'http://www.w3.org/2001/XMLSchema#unsignedShort',
+    'http://www.w3.org/2001/XMLSchema#unsignedByte',
+  ]);
+  return numericDatatypes.has(datatype);
 }
 
 function groupShapeBydependencies(shapes: IShape[], dependentShapes?: IShape[]): IShapeWithDependencies[] {

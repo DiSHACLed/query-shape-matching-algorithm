@@ -121,6 +121,41 @@ The star pattern for `?person` is fully covered by the shape.
     sh:property [ sh:path foaf:mbox ] .
   ```
 
+Another `CONTAINED` case combines a FILTER expression with compatible shape constraints.
+
+* **Query**:
+
+  ```sparql
+  PREFIX ex: <https://www.example.ca/>
+  PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+  SELECT * WHERE {
+    ?person ex:age ?age .
+    FILTER(?age > 18)
+  }
+  ```
+
+* **Shape**:
+
+  ```turtle
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  <http://example.org/AgeShape> a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+      sh:path <https://www.example.ca/age> ;
+      sh:datatype xsd:integer ;
+      sh:minInclusive 18 ;
+      sh:maxInclusive 35
+    ] .
+  ```
+
+Containment decisions do not use runtime FILTER truth values directly.
+Instead, FILTER expressions are only used when they can be checked against shape constraints.
+For example, a numeric comparison like `?age > 18` is compatible with an `xsd:integer` constraint,
+but can contradict a non-numeric datatype constraint.
+
 #### 2. `ALIGNED`
 
 The query matches one property (`foaf:name`), but contains `ex:age` which is not defined in the open shape.
@@ -142,6 +177,35 @@ The query matches one property (`foaf:name`), but contains `ex:age` which is not
   <http://example.org/PersonShape> a sh:NodeShape ;
     sh:property [ sh:path foaf:name ] .
   ```
+
+Another `ALIGNED` case with FILTER and constraints:
+
+* **Query**:
+
+  ```sparql
+  PREFIX ex: <https://www.example.ca/>
+  PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+  SELECT * WHERE {
+    ?person ex:age ?age ;
+            ex:nickname ?nick .
+    FILTER(?age > 18)
+  }
+  ```
+
+* **Shape**:
+
+  ```turtle
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  <http://example.org/OpenAdultShape> a sh:NodeShape ;
+    sh:property [
+      sh:path <https://www.example.ca/age> ;
+      sh:datatype xsd:integer
+    ] .
+  ```
+
+`ex:age` aligns and the numeric FILTER is compatible with the datatype constraint, while `ex:nickname` is not constrained by this open shape.
 
 #### 3. `UNALINGED`
 
@@ -192,6 +256,36 @@ Another `UNALINGED` case is when the root star pattern does not match, but a nes
     sh:property [ sh:path foaf:name ] .
   ```
 
+Another `UNALINGED` case with FILTER and constraints:
+
+* **Query**:
+
+  ```sparql
+  PREFIX ex: <https://www.example.ca/>
+  PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+  SELECT * WHERE {
+    ?person ex:age ?age ;
+            ex:status ?status .
+    FILTER(?age > 18)
+  }
+  ```
+
+* **Shape**:
+
+  ```turtle
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  <http://example.org/ClosedAgeShape> a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+      sh:path <https://www.example.ca/age> ;
+      sh:datatype xsd:integer
+    ] .
+  ```
+
+On a closed shape, `ex:age` matches but `ex:status` does not, so containment is partial (`UNALINGED`) even though the FILTER is constraint-compatible.
+
 #### 4. `WEAKLY_REJECTED`
 
 No triple pattern matches and at least one candidate shape is open.
@@ -211,6 +305,33 @@ No triple pattern matches and at least one candidate shape is open.
   <http://example.org/PersonShape> a sh:NodeShape ;
     sh:property [ sh:path foaf:name ] .
   ```
+
+Another `WEAKLY_REJECTED` case with FILTER and constraints:
+
+* **Query**:
+
+  ```sparql
+  PREFIX ex: <https://www.example.ca/>
+  SELECT * WHERE {
+    ?person ex:age ?age .
+    FILTER(?age > 18)
+  }
+  ```
+
+* **Shape**:
+
+  ```turtle
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  <http://example.org/OpenStringAgeShape> a sh:NodeShape ;
+    sh:property [
+      sh:path <https://www.example.ca/age> ;
+      sh:datatype xsd:string
+    ] .
+  ```
+
+The numeric FILTER contradicts the string datatype constraint. Because the shape is open, the result is `WEAKLY_REJECTED`.
 
 #### 5. `REJECTED`
 
@@ -233,11 +354,69 @@ The query uses `schema:birthDate`, but the shape only defines `foaf:name`.
     sh:property [ sh:path foaf:name ] .
   ```
 
+Another `REJECTED` case with FILTER and constraints:
+
+* **Query**:
+
+  ```sparql
+  PREFIX ex: <https://www.example.ca/>
+  SELECT * WHERE {
+    ?person ex:age ?age .
+    FILTER(?age > 18)
+  }
+  ```
+
+* **Shape**:
+
+  ```turtle
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  <http://example.org/ClosedStringAgeShape> a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+      sh:path <https://www.example.ca/age> ;
+      sh:datatype xsd:string
+    ] .
+  ```
+
+The same numeric FILTER/constraint contradiction on a closed shape yields `REJECTED`.
+
+Another `REJECTED` case due to min/max value constraints:
+
+* **Query**:
+
+  ```sparql
+  PREFIX ex: <https://www.example.ca/>
+  SELECT * WHERE {
+    ?person ex:age ?age .
+    FILTER(?age > 35)
+  }
+  ```
+
+* **Shape**:
+
+  ```turtle
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  <http://example.org/ClosedAdultRangeShape> a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+      sh:path <https://www.example.ca/age> ;
+      sh:datatype xsd:integer ;
+      sh:minInclusive 18 ;
+      sh:maxInclusive 35
+    ] .
+  ```
+
+The FILTER range (`> 35`) conflicts with the shape range (`18..35`), so the result is `REJECTED`.
+
 ## SPARQL Limitations
 
 The detection logic is focused on **Triple Patterns** and **Star Patterns**. Currently, the following SPARQL features are not (yet) supported:
 
-- **Filter Expressions**: Logic inside `FILTER` clauses is not checked against shape constraints.
+- **Filter Expressions**: FILTERs are only used to detect contradictions with shape constraints (for example numeric comparisons against non-numeric datatype constraints). Expressions that cannot be safely compared to shape constraints are conservatively ignored for containment decisions.
 - **Negative Patterns**: `MINUS` and `FILTER NOT EXISTS` are not used to determine containment.
 - **Complex Property Paths**: While simple paths are supported, complex or recursive property paths are not considered yet.
 - **Aggregates & Subqueries**: `GROUP BY`, `HAVING`, and subqueries are not processed.
