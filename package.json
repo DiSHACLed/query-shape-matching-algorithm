@@ -1,5 +1,5 @@
 {
-  "name": "query-shape-detection",
+  "name": "query-shape-matching",
   "version": "1.0.0",
   "main": "./build/index.js",
   "types": "./build/index.d.ts",
