@@ -5,7 +5,7 @@ import { DataFactory } from 'rdf-data-factory';
 import { describe, expect, it } from 'vitest';
 import { streamifyArray } from 'streamify-array';
 import { SHEX_SHAPE, TYPE_DEFINITION, SHEX_PREDICATE } from '../lib/constant';
-import { ConstraintType, IContraint, OneOf, type IShape } from '../lib/Shape';
+import { ConstraintType, IConstraint, OneOf, type IShape } from '../lib/Shape';
 import { shexShapeFromQuads } from '../lib/shex';
 
 const DF = new DataFactory<RDF.BaseQuad>();
@@ -98,14 +98,14 @@ describe.each([
         [`${LBDCVOC_PREFIX}hasCreator`, { min: 1, max: 1 }],
       ]);
 
-      const mapConstraint = new Map<string, IContraint | undefined>([
-        [TYPE_DEFINITION.value, { type: ConstraintType.TYPE, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
-        [`${LBDCVOC_PREFIX}id`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}long`]) }],
-        [`${LBDCVOC_PREFIX}creationDate`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}dateTime`]) }],
-        [`${LBDCVOC_PREFIX}locationIP`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}string`]) }],
-        [`${LBDCVOC_PREFIX}browserUsed`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}string`]) }],
-        [`${LBDCVOC_PREFIX}content`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}string`]) }],
-        [`${LBDCVOC_PREFIX}lenght`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}int`]) }],
+      const mapConstraint = new Map<string, IConstraint | undefined>([
+        [TYPE_DEFINITION.value, { type: ConstraintType.CLASS, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
+        [`${LBDCVOC_PREFIX}id`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}long`]) }],
+        [`${LBDCVOC_PREFIX}creationDate`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}dateTime`]) }],
+        [`${LBDCVOC_PREFIX}locationIP`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],
+        [`${LBDCVOC_PREFIX}browserUsed`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],
+        [`${LBDCVOC_PREFIX}content`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],
+        [`${LBDCVOC_PREFIX}lenght`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}int`]) }],
         [`${LBDCVOC_PREFIX}hasTag`, undefined],
         [`${LBDCVOC_PREFIX}isLocatedIn`, undefined],
         [`${LBDCVOC_PREFIX}hasCreator`, { type: ConstraintType.SHAPE, value: new Set(["http://example.com#Profile"]) }],
@@ -340,7 +340,7 @@ describe.each([
       ['http://xmlns.com/foaf/0.1/prop8', undefined],
       ['http://xmlns.com/foaf/0.1/prop10',
         {
-          type: ConstraintType.TYPE,
+          type: ConstraintType.DATATYPE,
           value: new Set(['http://example.org/unassigned']),
         },
       ],

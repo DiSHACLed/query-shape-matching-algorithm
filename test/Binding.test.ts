@@ -12,6 +12,7 @@ import * as N3 from 'n3';
 import { readFileSync } from 'fs';
 import { streamifyArray } from 'streamify-array';
 import { shexShapeFromQuads } from '../lib/shex';
+import { TYPE_DEFINITION } from '../lib/constant';
 
 const n3Parser = new N3.Parser();
 const sparqlParser = new SPARQLParser();
@@ -1682,7 +1683,7 @@ describe('Bindings', () => {
                     {
                         name: "p0",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t0"])
                         }
                     }
@@ -1727,9 +1728,9 @@ describe('Bindings', () => {
             const shape: Shape = new Shape({
                 name: 'foo', positivePredicates: [
                     {
-                        name: "p0",
+                        name: TYPE_DEFINITION.value,
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.CLASS,
                             value: new Set(["t0"])
                         }
                     }
@@ -1739,13 +1740,13 @@ describe('Bindings', () => {
 
             const triple: Triple = new Triple({
                 subject: 'y',
-                predicate: 'p0',
+                predicate: TYPE_DEFINITION.value,
                 object: DF.namedNode('t0')
             });
             const starPattern: IStarPatternWithDependencies = {
                 starPattern: new Map([
                     [
-                        'p0',
+                        TYPE_DEFINITION.value,
                         {
                             triple,
                             dependencies: undefined
@@ -1776,7 +1777,7 @@ describe('Bindings', () => {
                     {
                         name: "p0",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t_0"])
                         }
                     }
@@ -1821,23 +1822,23 @@ describe('Bindings', () => {
             const shape: Shape = new Shape({
                 name: 'foo', positivePredicates: [
                     {
-                        name: "p0",
+                        name: TYPE_DEFINITION.value,
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.CLASS,
                             value: new Set(["t0"])
                         }
                     },
                     {
                         name: "p1",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t1"])
                         }
                     },
                     {
                         name: "p2",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t2"])
                         }
                     }
@@ -1847,7 +1848,7 @@ describe('Bindings', () => {
 
             const triple1: Triple = new Triple({
                 subject: 'y',
-                predicate: 'p0',
+                predicate: TYPE_DEFINITION.value,
                 object: [DF.namedNode('t0')]
             });
             const triple2: Triple = new Triple({
@@ -1912,21 +1913,21 @@ describe('Bindings', () => {
                     {
                         name: "p0",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t0"])
                         }
                     },
                     {
                         name: "p1",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t1"])
                         }
                     },
                     {
                         name: "p2",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t_2"])
                         }
                     }
@@ -2030,7 +2031,7 @@ describe('Bindings', () => {
                     {
                         name: "p1",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t0"])
                         }
                     }
@@ -2327,7 +2328,7 @@ describe('Bindings', () => {
                     {
                         name: "p1",
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(["t_0"])
                         }
                     }

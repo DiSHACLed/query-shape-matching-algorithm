@@ -2,6 +2,7 @@ import type * as RDF from '@rdfjs/types';
 import {
   SHEX_PREDICATE,
   SHEX_EXPRESSION,
+  TYPE_DEFINITION,
   IRI_FIRST_RDF_LIST,
   SHEX_EXPRESSIONS,
   IRI_REST_RDF_LIST,
@@ -16,7 +17,7 @@ import {
   SHEX_ONE_OF,
 } from './constant';
 import type {
-  IContraint,
+  IConstraint,
   ShapeError,
   OneOf,
   IShape,
@@ -182,12 +183,13 @@ function concatShapeInfo(
  * Interpret an RDF term of a constraint into an object
  * @param {RDF.Term | undefined} constraint - The constraint RDF term
  * @param {Map<string, string>} mapIriDatatype - A map of IRI and data type
- * @returns {IContraint | undefined} - The constraint or undefined if the constraint is not supported
+ * @returns {IConstraint | undefined} - The constraint or undefined if the constraint is not supported
  */
 function interpretConstraint(
   constraint: RDF.Term | undefined,
   mapIriDatatype: Map<string, string>,
-): IContraint | undefined {
+  predicate?: string,
+): IConstraint | undefined {
   if (constraint === undefined) {
     return undefined;
   }
@@ -204,7 +206,9 @@ function interpretConstraint(
     if (dataType !== undefined) {
       return {
         value: new Set([dataType]),
-        type: ConstraintType.TYPE,
+        type: predicate === TYPE_DEFINITION.value
+          ? ConstraintType.CLASS
+          : ConstraintType.DATATYPE,
       };
     }
   }
@@ -228,7 +232,7 @@ function appendPredicates(
       args.negativePredicates.push(predicate);
     } else {
       const constraintIri = args.mapIriConstraint.get(args.current);
-      const constraint = interpretConstraint(constraintIri, args.mapIriDatatype);
+      const constraint = interpretConstraint(constraintIri, args.mapIriDatatype, predicate);
       args.positivePredicates.push({
         name: predicate,
         cardinality: {

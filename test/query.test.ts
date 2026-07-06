@@ -469,7 +469,7 @@ describe('query', () => {
                 RDF_TYPE,
                 {
                   triple: new Triple({
-                    subject: 'x', predicate: RDF_TYPE, object: [
+                    subject: 'x', predicate: RDF_TYPE, boundVariable: 'person', object: [
                       DF.namedNode('http://exemple.be/Person'),
                       DF.namedNode('http://exemple.be/Persoon')
                     ]
@@ -493,6 +493,7 @@ describe('query', () => {
                   triple: new Triple({
                     subject: 'y',
                     predicate: 'http://exemple.be',
+                    boundVariable: 'type',
                     object: [DF.namedNode('http://exemple.be/Post')]
                   }),
                   dependencies: undefined
@@ -5815,6 +5816,7 @@ describe('query', () => {
                     triple: new Triple({
                       subject: 'message',
                       predicate: RDF_TYPE,
+                      boundVariable: 'type',
                       object: [
                         DF.namedNode(`${SNVOC_PREFIX}Comment`),
                         DF.namedNode(`${SNVOC_PREFIX}Post`),
@@ -6332,6 +6334,7 @@ describe('query', () => {
                     triple: new Triple({
                       subject: 'message',
                       predicate: RDF_TYPE,
+                      boundVariable: 'type',
                       object: [DF.namedNode(`${SNVOC_PREFIX}Comment`), DF.namedNode(`${SNVOC_PREFIX}Post`)]
                     }),
                     dependencies: undefined

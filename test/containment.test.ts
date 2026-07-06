@@ -13,6 +13,7 @@ import * as N3 from 'n3';
 import { readFileSync } from 'fs';
 import { streamifyArray } from 'streamify-array';
 import { shexShapeFromQuads } from '../lib/shex';
+import { shaclShapeFromQuads } from '../lib/shacl';
 
 const DF = new DataFactory<BaseQuad>();
 const n3Parser = new N3.Parser();
@@ -53,7 +54,7 @@ describe('solveShapeQueryContainment', () => {
                 {
                     name: "https://www.example.ca/p1",
                     constraint: {
-                        type: ConstraintType.TYPE,
+                        type: ConstraintType.DATATYPE,
                         value: new Set(["https://www.example.ca/t0"])
                     }
                 }
@@ -131,6 +132,10 @@ describe('solveShapeQueryContainment', () => {
 
             ], closed: true
         });
+
+        /*********************************************************************
+         * General tests cases
+         * *******************************************************************/
 
         it('should return an empty result given an empty query and no shape', () => {
             const query: IQuery = {
@@ -252,6 +257,10 @@ describe('solveShapeQueryContainment', () => {
             expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
         });
 
+
+        /*********************************************************************
+         * Specific tests cases
+         * *******************************************************************/
         it('should return WEAKLY_REJECTED when no triple matches on an open shape', () => {
             const zStarPattern = generateZAlternatifStarPattern();
             const query: IQuery = {
@@ -306,125 +315,123 @@ describe('solveShapeQueryContainment', () => {
             expect(solveShapeQueryContainment({ query, shapes: [closedShape] })).toStrictEqual(expectedResult);
         });
 
-        it('should keep containment when FILTER is statically true', () => {
-            const queryString = `
-            SELECT * WHERE {
-              ?x <https://www.example.ca/p0> ?y .
-              FILTER(true)
-            }`;
-            const querySparql = toAlgebra(sparqlParser.parse(queryString));
-            const query = generateQuery(querySparql);
-            const shapes: IShape[] = [shape];
+        it('should keep containment with FILTER regex and SHACL pattern constraint', async () => {
+            const shapeIri = 'https://www.example.ca/patternShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 
-            const expectedResult: IResult = {
-                starPatternsContainment: new Map([
-                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
-                ]),
-                visitShapeBoundedResource: new Map([
-                    [shape.name, true],
-                ])
-            };
+            ex:patternShape a sh:NodeShape ;
+                sh:property [
+                    sh:path ex:nickname ;
+                    sh:datatype xsd:string ;
+                    sh:pattern "^foo"
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
 
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
-        });
-
-        it('should keep containment when FILTER is statically false on closed shapes', () => {
-            const queryString = `
-            SELECT * WHERE {
-              ?x <https://www.example.ca/p0> ?y .
-              FILTER(false)
-            }`;
-            const querySparql = toAlgebra(sparqlParser.parse(queryString));
-            const query = generateQuery(querySparql);
-            const shapes: IShape[] = [shape];
-
-            const expectedResult: IResult = {
-                starPatternsContainment: new Map([
-                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
-                ]),
-                visitShapeBoundedResource: new Map([
-                    [shape.name, true],
-                ])
-            };
-
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
-        });
-
-        it('should keep containment when FILTER is statically false on open shapes', () => {
-            const openShape: IShape = new Shape({
-                name: 'fooOpenFilter',
-                positivePredicates: [
-                    'https://www.example.ca/p0'
-                ],
-                closed: false
-            });
-
-            const queryString = `
-            SELECT * WHERE {
-              ?x <https://www.example.ca/p0> ?y .
-              FILTER(false)
-            }`;
-            const querySparql = toAlgebra(sparqlParser.parse(queryString));
-            const query = generateQuery(querySparql);
-
-            const expectedResult: IResult = {
-                starPatternsContainment: new Map([
-                    ["x", { result: ContainmentResult.CONTAINED, target: [openShape.name], bindings: expect.any(Map) }],
-                ]),
-                visitShapeBoundedResource: new Map([
-                    [openShape.name, true],
-                ])
-            };
-
-            expect(solveShapeQueryContainment({ query, shapes: [openShape] })).toStrictEqual(expectedResult);
-        });
-
-        it('should support FILTER regex(str(?v), pattern) with VALUES', () => {
             const queryString = `
             PREFIX ex: <https://www.example.ca/>
             SELECT * WHERE {
-              ?x ex:p0 ?v .
-              VALUES ?v { "foobar" }
-              FILTER(regex(str(?v), "foo"))
+              ?s ex:nickname ?nickname .
+              FILTER(regex(str(?nickname), "^foo"))
             }`;
             const querySparql = toAlgebra(sparqlParser.parse(queryString));
             const query = generateQuery(querySparql);
-            const shapes: IShape[] = [shape];
+            const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
                 starPatternsContainment: new Map([
-                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                    ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
                 visitShapeBoundedResource: new Map([
                     [shape.name, true],
                 ])
             };
 
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
         });
 
-        it('should keep containment when FILTER regex(str(?v), pattern) is false with VALUES', () => {
+        it('should keep containment when SHACL pattern implies FILTER regex prefix', async () => {
+            const shapeIri = 'https://www.example.ca/patternShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:patternShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:nickname ;
+                    sh:datatype xsd:string ;
+                    sh:pattern "^foo"
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
+
             const queryString = `
             PREFIX ex: <https://www.example.ca/>
             SELECT * WHERE {
-              ?x ex:p0 ?v .
-              VALUES ?v { "foobar" }
-              FILTER(regex(str(?v), "^bar"))
+              ?s ex:nickname ?nickname .
+              FILTER(regex(str(?nickname), "^f"))
             }`;
             const querySparql = toAlgebra(sparqlParser.parse(queryString));
             const query = generateQuery(querySparql);
-            const shapes: IShape[] = [shape];
+            const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
                 starPatternsContainment: new Map([
-                    ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                    ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
                 visitShapeBoundedResource: new Map([
                     [shape.name, true],
                 ])
             };
 
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should reject when FILTER regex contradicts SHACL pattern constraint', async () => {
+            const shapeIri = 'https://www.example.ca/patternShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:patternShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:nickname ;
+                    sh:datatype xsd:string ;
+                    sh:pattern "^foo"
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?s ex:nickname ?nickname .
+              FILTER(regex(str(?nickname), "^bar"))
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shape = parsedShape as IShape;
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
         });
 
         it('should support FILTER datatype(?v) comparison with VALUES', () => {
@@ -433,7 +440,6 @@ describe('solveShapeQueryContainment', () => {
             PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
             SELECT * WHERE {
               ?x ex:p0 ?v .
-              VALUES ?v { "42"^^xsd:integer }
               FILTER(datatype(?v) = xsd:integer)
             }`;
             const querySparql = toAlgebra(sparqlParser.parse(queryString));
@@ -452,15 +458,260 @@ describe('solveShapeQueryContainment', () => {
             expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
         });
 
-        it('should keep containment for age values in the (18, 35] range', () => {
+        it('should keep containment with FILTER numeric comparison and SHACL datatype constraint', async () => {
+            const shapeIri = 'https://www.example.ca/myShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:myShape a sh:NodeShape ;
+                sh:property [
+                    sh:path ex:hasAge ;
+                    sh:datatype xsd:integer ;
+                    sh:minInclusive 15 ;
+                    sh:maxInclusive 35
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?s ex:hasAge ?age .
+              FILTER (?age > 18)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shape = parsedShape as IShape;
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should reject when FILTER numeric bound contradicts SHACL inclusive facets', async () => {
+            const shapeIri = 'https://www.example.ca/myShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:myShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:hasAge ;
+                    sh:datatype xsd:integer ;
+                    sh:minInclusive 15 ;
+                    sh:maxInclusive 35
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?s ex:hasAge ?age .
+              FILTER (?age > 40)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shape = parsedShape as IShape;
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment when VALUES literal respects SHACL numeric facets', async () => {
+            const shapeIri = 'https://www.example.ca/myShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:myShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:hasAge ;
+                    sh:datatype xsd:integer ;
+                    sh:minInclusive 15 ;
+                    sh:maxInclusive 35
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            SELECT * WHERE {
+              ?s ex:hasAge ?age .
+              VALUES ?age { "20"^^xsd:integer }
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shape = parsedShape as IShape;
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should reject when all VALUES literals violate SHACL numeric facets', async () => {
+            const shapeIri = 'https://www.example.ca/myShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:myShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:hasAge ;
+                    sh:datatype xsd:integer ;
+                    sh:minInclusive 15 ;
+                    sh:maxInclusive 35
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            SELECT * WHERE {
+              ?s ex:hasAge ?age .
+              VALUES ?age { "10"^^xsd:integer "40"^^xsd:integer }
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shape = parsedShape as IShape;
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, false],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should reject when FILTER contradicts SHACL exclusive facets', async () => {
+            const shapeIri = 'https://www.example.ca/myShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:myShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:hasAge ;
+                    sh:datatype xsd:integer ;
+                    sh:minExclusive 18 ;
+                    sh:maxExclusive 35
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?s ex:hasAge ?age .
+              FILTER (?age <= 18)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shape = parsedShape as IShape;
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should reject numeric FILTER when SHACL datatype constraint is non-numeric', async () => {
+            const shapeIri = 'https://www.example.ca/myShape';
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:myShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:hasAge ;
+                    sh:datatype xsd:string
+                ] .
+            `;
+            const parsedShape = await shaclShapeFromQuads(n3Parser.parse(shacl), shapeIri);
+            expect(parsedShape).not.toBeInstanceOf(Error);
+
+            const queryString = `
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?s ex:hasAge ?age .
+              FILTER (?age > 18)
+            }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+            const shape = parsedShape as IShape;
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [shape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment for CLASS-constrained named-node values', () => {
             const constrainedShape: IShape = new Shape({
-                name: 'fooAgeRange',
+                name: 'fooClassConstraint',
                 positivePredicates: [
                     {
-                        name: 'https://www.example.ca/age',
+                        name: TYPE_DEFINITION.value,
                         constraint: {
-                            type: ConstraintType.TYPE,
-                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer'])
+                            type: ConstraintType.CLASS,
+                            value: new Set(['https://www.example.ca/Person'])
                         }
                     }
                 ],
@@ -469,12 +720,46 @@ describe('solveShapeQueryContainment', () => {
 
             const queryString = `
             PREFIX ex: <https://www.example.ca/>
-            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+            PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
             SELECT * WHERE {
-              ?x ex:age ?age .
-                            VALUES ?age { "21"^^xsd:integer }
-                            FILTER(?age > 18 && ?age <= 35)
+                ?x rdf:type ex:Person .
             }`;
+            const querySparql = toAlgebra(sparqlParser.parse(queryString));
+            const query = generateQuery(querySparql);
+
+            const expectedResult: IResult = {
+                starPatternsContainment: new Map([
+                    ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
+                ]),
+                visitShapeBoundedResource: new Map([
+                    [constrainedShape.name, true],
+                ])
+            };
+
+            expect(solveShapeQueryContainment({ query, shapes: [constrainedShape] })).toStrictEqual(expectedResult);
+        });
+
+        it('should keep containment for numeric FILTER compatible with datatype constraint', () => {
+            const constrainedShape: IShape = new Shape({
+                name: 'fooAgeRange',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer'])
+                        }
+                    }
+                ],
+                closed: true
+            });
+
+                        const queryString = `
+                        PREFIX ex: <https://www.example.ca/>
+                        SELECT * WHERE {
+                            ?x ex:age ?age .
+                            FILTER(?age > 18 && ?age <= 35)
+                        }`;
             const querySparql = toAlgebra(sparqlParser.parse(queryString));
             const query = generateQuery(querySparql);
 
@@ -497,7 +782,7 @@ describe('solveShapeQueryContainment', () => {
                     {
                         name: 'https://www.example.ca/age',
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(['http://www.w3.org/2001/XMLSchema#integer'])
                         }
                     }
@@ -509,9 +794,8 @@ describe('solveShapeQueryContainment', () => {
             PREFIX ex: <https://www.example.ca/>
             PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
             SELECT * WHERE {
-              ?x ex:age ?age .
-                            VALUES ?age { "17"^^xsd:integer }
-                            FILTER(?age > 18 && ?age <= 35)
+                ?x ex:age ?age .
+                FILTER(?age > 18 && ?age <= 35)
             }`;
             const querySparql = toAlgebra(sparqlParser.parse(queryString));
             const query = generateQuery(querySparql);
@@ -535,7 +819,7 @@ describe('solveShapeQueryContainment', () => {
                     {
                         name: 'https://www.example.ca/age',
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(['http://www.w3.org/2001/XMLSchema#integer'])
                         }
                     }
@@ -548,7 +832,6 @@ describe('solveShapeQueryContainment', () => {
             PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
             SELECT * WHERE {
               ?x ex:age ?age .
-              VALUES ?age { "40"^^xsd:integer }
               FILTER(?age > 18 && ?age <= 35)
             }`;
             const querySparql = toAlgebra(sparqlParser.parse(queryString));
@@ -573,7 +856,7 @@ describe('solveShapeQueryContainment', () => {
                     {
                         name: 'https://www.example.ca/age',
                         constraint: {
-                            type: ConstraintType.TYPE,
+                            type: ConstraintType.DATATYPE,
                             value: new Set(['http://www.w3.org/2001/XMLSchema#string'])
                         }
                     }
@@ -1385,27 +1668,29 @@ describe('solveShapeQueryContainment', () => {
             });
 
             it('interactive-discover-8', async () => {
-                const queryString = `PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-                                    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                                    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
-                                    PREFIX sn: <http://localhost:3000/www.ldbc.eu/ldbc_socialnet/1.0/data/>
-                                    PREFIX snvoc: <http://localhost:3000/www.ldbc.eu/ldbc_socialnet/1.0/vocabulary/>
-                                    PREFIX sntag: <http://localhost:3000/www.ldbc.eu/ldbc_socialnet/1.0/tag/>
-                                    PREFIX foaf: <http://xmlns.com/foaf/0.1/>
-                                    PREFIX dbpedia: <http://localhost:3000/dbpedia.org/resource/>
-                                    PREFIX dbpedia-owl: <http://localhost:3000/dbpedia.org/ontology/>
+                const queryString = `
+                    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+                    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                    PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+                    PREFIX sn: <http://localhost:3000/www.ldbc.eu/ldbc_socialnet/1.0/data/>
+                    PREFIX snvoc: <http://localhost:3000/www.ldbc.eu/ldbc_socialnet/1.0/vocabulary/>
+                    PREFIX sntag: <http://localhost:3000/www.ldbc.eu/ldbc_socialnet/1.0/tag/>
+                    PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+                    PREFIX dbpedia: <http://localhost:3000/dbpedia.org/resource/>
+                    PREFIX dbpedia-owl: <http://localhost:3000/dbpedia.org/ontology/>
 
-                                    SELECT
-                                    DISTINCT
-                                        ?creator
-                                        ?messageContent
-                                    WHERE
-                                    {
-                                        ?person snvoc:likes [ snvoc:hasPost|snvoc:hasComment ?message ].
-                                        ?message snvoc:hasCreator ?creator.
-                                        ?otherMessage snvoc:hasCreator ?creator;
-                                            snvoc:content ?messageContent.
-                                    } LIMIT 10`;
+                    SELECT
+                    DISTINCT
+                        ?creator
+                        ?messageContent
+                    WHERE
+                    {
+                        ?person snvoc:likes [ snvoc:hasPost|snvoc:hasComment ?message ].
+                        ?message snvoc:hasCreator ?creator.
+                        ?otherMessage snvoc:hasCreator ?creator;
+                            snvoc:content ?messageContent.
+                    } LIMIT 10
+                `;
                 const querySparql = toAlgebra(sparqlParser.parse(queryString))
                 const query = generateQuery(querySparql);
 

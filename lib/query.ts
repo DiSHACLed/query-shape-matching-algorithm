@@ -98,6 +98,7 @@ function buildQuery(
             subject: triple.subject,
             predicate: triple.predicate,
             object: value,
+            boundVariable: triple.object.value,
             cardinality: triple.cardinality,
             negatedSet: triple.negatedSet
           });
