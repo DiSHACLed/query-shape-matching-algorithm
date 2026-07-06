@@ -1,5 +1,5 @@
 # query-shape-matching-algorithm
-[![npm version](https://badge.fury.io/js/query-shape-detection.svg)](https://www.npmjs.com/package/query-shape-detection)
+[![npm version](https://badge.fury.io/js/query-shape-matching.svg)](https://www.npmjs.com/package/query-shape-matching)
 
 Reference implementation for the query/shape matching algorithm described in the discovery specification.
 
