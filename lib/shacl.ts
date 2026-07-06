@@ -1,6 +1,6 @@
 import type * as RDF from '@rdfjs/types';
 import { DataFactory } from 'rdf-data-factory';
-import type { IContraint, OneOf, IShape, IPredicate } from './Shape';
+import type { IConstraint, OneOf, IShape, IPredicate } from './Shape';
 import { Shape, ConstraintType, PoorlyFormatedShapeError } from './Shape';
 import type { ShapeError } from './Shape';
 
@@ -9,6 +9,12 @@ import {
     SHACL_PATH,
     SHACL_MIN_COUNT,
     SHACL_MAX_COUNT,
+    SHACL_MIN_INCLUSIVE,
+    SHACL_MAX_INCLUSIVE,
+    SHACL_MIN_EXCLUSIVE,
+    SHACL_MAX_EXCLUSIVE,
+    SHACL_PATTERN,
+    SHACL_FLAGS,
     SHACL_CLOSED,
     SHACL_CLASS,
     SHACL_DATATYPE,
@@ -33,6 +39,12 @@ interface IPropertyShapeData {
     path?: string;
     minCount?: number;
     maxCount?: number;
+    minInclusive?: number;
+    maxInclusive?: number;
+    minExclusive?: number;
+    maxExclusive?: number;
+    pattern?: string;
+    flags?: string;
     classConstraint?: string; // sh:class value
     datatypeConstraint?: string; // sh:datatype value
     nodeConstraint?: string; // sh:node value
@@ -155,6 +167,42 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
     // sh:maxCount
     if (quad.predicate.equals(SHACL_MAX_COUNT)) {
         getOrCreatePropData(map, s).maxCount = Number(o);
+        return;
+    }
+
+    // sh:minInclusive
+    if (quad.predicate.equals(SHACL_MIN_INCLUSIVE)) {
+        getOrCreatePropData(map, s).minInclusive = Number(o);
+        return;
+    }
+
+    // sh:maxInclusive
+    if (quad.predicate.equals(SHACL_MAX_INCLUSIVE)) {
+        getOrCreatePropData(map, s).maxInclusive = Number(o);
+        return;
+    }
+
+    // sh:minExclusive
+    if (quad.predicate.equals(SHACL_MIN_EXCLUSIVE)) {
+        getOrCreatePropData(map, s).minExclusive = Number(o);
+        return;
+    }
+
+    // sh:maxExclusive
+    if (quad.predicate.equals(SHACL_MAX_EXCLUSIVE)) {
+        getOrCreatePropData(map, s).maxExclusive = Number(o);
+        return;
+    }
+
+    // sh:pattern
+    if (quad.predicate.equals(SHACL_PATTERN)) {
+        getOrCreatePropData(map, s).pattern = o;
+        return;
+    }
+
+    // sh:flags
+    if (quad.predicate.equals(SHACL_FLAGS)) {
+        getOrCreatePropData(map, s).flags = o;
         return;
     }
 
@@ -322,12 +370,12 @@ function buildPredicate(data: IPropertyShapeData): IPredicate {
     };
 }
 
-function resolveConstraint(data: IPropertyShapeData): IContraint | undefined {
+function resolveConstraint(data: IPropertyShapeData): IConstraint | undefined {
     if (data.classConstraint !== undefined) {
-        // sh:class constrains the RDF type of the object (analogous to ShEx datatype) → TYPE
+        // sh:class constrains the object to be an instance/class IRI.
         return {
             value: new Set([data.classConstraint]),
-            type: ConstraintType.TYPE,
+            type: ConstraintType.CLASS,
         };
     }
     if (data.nodeConstraint !== undefined) {
@@ -338,9 +386,29 @@ function resolveConstraint(data: IPropertyShapeData): IContraint | undefined {
         };
     }
     if (data.datatypeConstraint !== undefined) {
+        const numericFacets: Partial<IConstraint> = {};
+        if (data.minInclusive !== undefined) {
+            numericFacets.minInclusive = data.minInclusive;
+        }
+        if (data.maxInclusive !== undefined) {
+            numericFacets.maxInclusive = data.maxInclusive;
+        }
+        if (data.minExclusive !== undefined) {
+            numericFacets.minExclusive = data.minExclusive;
+        }
+        if (data.maxExclusive !== undefined) {
+            numericFacets.maxExclusive = data.maxExclusive;
+        }
+        if (data.pattern !== undefined) {
+            numericFacets.pattern = data.pattern;
+        }
+        if (data.flags !== undefined) {
+            numericFacets.flags = data.flags;
+        }
         return {
             value: new Set([data.datatypeConstraint]),
-            type: ConstraintType.TYPE,
+            type: ConstraintType.DATATYPE,
+            ...numericFacets,
         };
     }
     return undefined;

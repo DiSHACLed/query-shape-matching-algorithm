@@ -36,7 +36,7 @@ export interface IShape extends IShapeObj {
  */
 export interface IPredicate {
   name: string;
-  constraint?: IContraint;
+  constraint?: IConstraint;
   cardinality?: ICardinality;
   negative?: boolean;
   optional?: boolean;
@@ -50,25 +50,31 @@ function toJsonPredicate(predicate: IPredicate): IPredicateJson {
 }
 
 export type IPredicateJson = Omit<IPredicate, "constraint"> & {
-  constraint?: IContraintJson;
+  constraint?: IConstraintJson;
 }
 
 /**
  * A constraint
  */
-export interface IContraint {
+export interface IConstraint {
   value: Set<string>;
   type: ConstraintType;
+  minInclusive?: number;
+  maxInclusive?: number;
+  minExclusive?: number;
+  maxExclusive?: number;
+  pattern?: string;
+  flags?: string;
 }
 
-function toJsonConstraint(constraint: IContraint): IContraintJson {
+function toJsonConstraint(constraint: IConstraint): IConstraintJson {
   return {
     ...constraint,
     value: Array.from(constraint.value)
   }
 }
 
-export type IContraintJson = Omit<IContraint, "value"> & {
+export type IConstraintJson = Omit<IConstraint, "value"> & {
   value: string[]
 };
 
@@ -92,8 +98,10 @@ export type IShapeJson = Omit<IShapeObj, "positivePredicates" | "negativePredica
 export const enum ConstraintType {
   // Is bound to another shape
   SHAPE,
-  // Is bound by an RDF type
-  TYPE
+  // Is bound by a class IRI (typically object is a NamedNode)
+  CLASS,
+  // Is bound by a literal datatype IRI
+  DATATYPE,
 }
 /**
  * A simple Shape object

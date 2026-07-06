@@ -120,7 +120,7 @@ describe('Shape', () => {
         { name: 'b' },
         {
           name: 'c',
-          constraint: { value: new Set(["1", "2"]), type: ConstraintType.TYPE },
+          constraint: { value: new Set(["1", "2"]), type: ConstraintType.DATATYPE },
           cardinality: { min: 1, max: 5 },
           negative: false,
           optional: false
@@ -129,7 +129,7 @@ describe('Shape', () => {
 
       const negativePredicates = [{
         name: 'd',
-        constraint: { value: new Set(["1", "2"]), type: ConstraintType.TYPE },
+        constraint: { value: new Set(["1", "2"]), type: ConstraintType.DATATYPE },
         cardinality: { min: 1, max: 5 },
         negative: true,
         optional: false
@@ -142,7 +142,7 @@ describe('Shape', () => {
           { name: 'b', optional: false, constraint: undefined },
           {
             name: 'c',
-            constraint: { value: ["1", "2"], type: ConstraintType.TYPE },
+            constraint: { value: ["1", "2"], type: ConstraintType.DATATYPE },
             cardinality: { min: 1, max: 5 },
             negative: false,
             optional: false
@@ -150,7 +150,7 @@ describe('Shape', () => {
         ],
         negativePredicates: [{
           name: 'd',
-          constraint: { value: ["1", "2"], type: ConstraintType.TYPE },
+          constraint: { value: ["1", "2"], type: ConstraintType.DATATYPE },
           cardinality: { min: 1, max: 5 },
           negative: true,
           optional: false
@@ -169,7 +169,7 @@ describe('Shape', () => {
         { name: 'b' },
         {
           name: 'c',
-          constraint: { value: new Set(["1", "2"]), type: ConstraintType.TYPE },
+          constraint: { value: new Set(["1", "2"]), type: ConstraintType.DATATYPE },
           cardinality: { min: 0, max: 5 },
           negative: false,
           optional: true
@@ -191,7 +191,7 @@ describe('Shape', () => {
           { name: 'b', constraint: undefined, optional: false },
           {
             name: 'c',
-            constraint: { value: ["1", "2"], type: ConstraintType.TYPE },
+            constraint: { value: ["1", "2"], type: ConstraintType.DATATYPE },
             cardinality: { min: 0, max: 5 },
             negative: false,
             optional: true
@@ -340,7 +340,7 @@ describe('Shape', () => {
         name: 'foo', positivePredicates: ['a', 'b', {
           name: 'c', constraint: {
             value: new Set(['bar']),
-            type: ConstraintType.TYPE,
+            type: ConstraintType.DATATYPE,
           },
         }]
       });

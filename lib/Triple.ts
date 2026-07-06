@@ -7,7 +7,6 @@ import { ICardinality } from './Shape';
 export interface IStarPatternWithDependencies {
   // indexed by predicate
   starPattern: Map<string, ITripleWithDependencies>;
-  filterExpression?: string;
   name: string;
   isVariable: boolean;
 }
@@ -45,6 +44,8 @@ export interface ITripleArgs {
   // the object was a variable and a VALUES clase was used
   // to bind it to multiple values
   object: Term | Term[];
+  // the original variable name when VALUES rewrote the object to a list of terms
+  boundVariable?: string;
   isOptional?: boolean;
   cardinality?: ICardinality;
   negatedSet?: Set<string>;
@@ -65,6 +66,7 @@ export class Triple implements ITriple {
   public readonly predicate: string;
   public readonly subject: string;
   public readonly object: Term | Term[];
+  public readonly boundVariable?: string;
   // the cardinality of the predicate
   public readonly cardinality?: ICardinality;
   public readonly negatedSet?: Set<string>;
@@ -74,10 +76,11 @@ export class Triple implements ITriple {
    *
    * @param {ITripleArgs} tripleObject - A triple object
    */
-  public constructor({ subject, predicate, object, cardinality, negatedSet: negative, isOptional }: ITripleArgs) {
+  public constructor({ subject, predicate, object, boundVariable, cardinality, negatedSet: negative, isOptional }: ITripleArgs) {
     this.predicate = predicate;
     this.object = object;
     this.subject = subject;
+    this.boundVariable = boundVariable;
     this.cardinality = cardinality;
     this.negatedSet = negative;
     this.isOptional = isOptional ?? false;
@@ -90,6 +93,7 @@ export class Triple implements ITriple {
     Object.freeze(this.predicate);
     Object.freeze(this.isOptional);
     Object.freeze(this.object);
+    Object.freeze(this.boundVariable);
     Object.freeze(this.subject);
     Object.freeze(this);
   }
@@ -99,13 +103,17 @@ export class Triple implements ITriple {
    * @returns {ITripleArgs} a Triple object
    */
   public toObject(): ITripleArgs {
-    return {
+    const tripleObject: ITripleArgs = {
       subject: this.subject,
       predicate: this.predicate,
       object: this.object,
       cardinality: this.cardinality,
       isOptional: this.isOptional
     };
+    if (this.boundVariable !== undefined) {
+      tripleObject.boundVariable = this.boundVariable;
+    }
+    return tripleObject;
   }
 
   public getLinkedStarPattern(): string | undefined {

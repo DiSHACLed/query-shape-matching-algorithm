@@ -5,10 +5,10 @@ import { DataFactory } from 'rdf-data-factory';
 import { describe, expect, it } from 'vitest';
 import { streamifyArray } from 'streamify-array';
 import { TYPE_DEFINITION } from '../lib/constant';
-import { ConstraintType, type IContraint, type OneOf, type IShape } from '../lib/Shape';
+import { ConstraintType, type IConstraint, type OneOf, type IShape } from '../lib/Shape';
 import { shaclShapeFromQuads } from '../lib/shacl';
 
-const DF = new DataFactory<RDF.BaseQuad>();
+const DF = new DataFactory<RDF.Quad>();
 const n3Parser = new N3.Parser();
 
 const shapeIri = 'http:exemple.ca/foo';
@@ -52,7 +52,7 @@ describe.each([
     // Deliberately put sh:property BEFORE sh:path so the blank node has no entry
     // in propertyData yet when sh:property is processed (exercises line 139 in shacl.ts)
     const propBn = DF.blankNode('p1');
-    const quads: RDF.BaseQuad[] = [
+    const quads: RDF.Quad[] = [
       // sh:property comes first — blank node 'p1' has no propertyData entry yet
       DF.quad(DF.namedNode(shapeIri), DF.namedNode('http://www.w3.org/ns/shacl#property'), propBn),
       // sh:path comes after — now propertyData entry exists for 'p1'
@@ -174,7 +174,7 @@ describe.each([
 
   // ── Constraints ─────────────────────────────────────────────────────────
 
-  it(`${name}: should handle sh:node (SHAPE) and sh:datatype (TYPE) constraints`, async () => {
+  it(`${name}: should handle sh:node (SHAPE) and sh:datatype (DATATYPE) constraints`, async () => {
     const shape = await shaclShapeFromQuads(shapeWithConstraints, shapeIri);
     expect(shape).not.toBeInstanceOf(Error);
 
@@ -194,20 +194,90 @@ describe.each([
 
     // sh:node constraint → ConstraintType.SHAPE
     const prop1 = (shape as IShape).get(`${FOAF_PREFIX}prop1`);
-    expect(prop1?.constraint).toStrictEqual<IContraint>({
+    expect(prop1?.constraint).toStrictEqual<IConstraint>({
       type: ConstraintType.SHAPE,
       value: new Set(['http:exemple.ca/bar']),
     });
     expect(prop1?.cardinality).toStrictEqual({ min: 0, max: 1 });
 
-    // sh:datatype constraint → ConstraintType.TYPE
+    // sh:datatype constraint → ConstraintType.DATATYPE
     const prop10 = (shape as IShape).get(`${FOAF_PREFIX}prop10`);
-    expect(prop10?.constraint).toStrictEqual<IContraint>({
-      type: ConstraintType.TYPE,
+    expect(prop10?.constraint).toStrictEqual<IConstraint>({
+      type: ConstraintType.DATATYPE,
       value: new Set(['http://example.org/unassigned']),
     });
 
     expect((shape as IShape).getLinkedShapeIri()).toStrictEqual(new Set(['http:exemple.ca/bar']));
+  });
+
+  it(`${name}: should parse sh:minInclusive/sh:maxInclusive and sh:minExclusive/sh:maxExclusive facets`, async () => {
+    const SH = 'http://www.w3.org/ns/shacl#';
+    const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
+    const XSD = 'http://www.w3.org/2001/XMLSchema#';
+
+    const inclusiveProp = DF.blankNode('inclusiveProp');
+    const exclusiveProp = DF.blankNode('exclusiveProp');
+
+    const quads = [
+      DF.quad(DF.namedNode(shapeIri), DF.namedNode(`${RDF}type`), DF.namedNode(`${SH}NodeShape`)),
+      DF.quad(DF.namedNode(shapeIri), DF.namedNode(`${SH}property`), inclusiveProp),
+      DF.quad(inclusiveProp, DF.namedNode(`${SH}path`), DF.namedNode('http://example.org/hasAgeInclusive')),
+      DF.quad(inclusiveProp, DF.namedNode(`${SH}datatype`), DF.namedNode(`${XSD}integer`)),
+      DF.quad(inclusiveProp, DF.namedNode(`${SH}minInclusive`), DF.literal('15', DF.namedNode(`${XSD}integer`))),
+      DF.quad(inclusiveProp, DF.namedNode(`${SH}maxInclusive`), DF.literal('35', DF.namedNode(`${XSD}integer`))),
+      DF.quad(DF.namedNode(shapeIri), DF.namedNode(`${SH}property`), exclusiveProp),
+      DF.quad(exclusiveProp, DF.namedNode(`${SH}path`), DF.namedNode('http://example.org/hasAgeExclusive')),
+      DF.quad(exclusiveProp, DF.namedNode(`${SH}datatype`), DF.namedNode(`${XSD}integer`)),
+      DF.quad(exclusiveProp, DF.namedNode(`${SH}minExclusive`), DF.literal('18', DF.namedNode(`${XSD}integer`))),
+      DF.quad(exclusiveProp, DF.namedNode(`${SH}maxExclusive`), DF.literal('40', DF.namedNode(`${XSD}integer`))),
+    ] as RDF.Quad[];
+
+    const shape = await shaclShapeFromQuads(populateFunction(quads), shapeIri);
+    expect(shape).not.toBeInstanceOf(Error);
+
+    const inclusiveConstraint = (shape as IShape).get('http://example.org/hasAgeInclusive')?.constraint;
+    expect(inclusiveConstraint).toStrictEqual<IConstraint>({
+      type: ConstraintType.DATATYPE,
+      value: new Set([`${XSD}integer`]),
+      minInclusive: 15,
+      maxInclusive: 35,
+    });
+
+    const exclusiveConstraint = (shape as IShape).get('http://example.org/hasAgeExclusive')?.constraint;
+    expect(exclusiveConstraint).toStrictEqual<IConstraint>({
+      type: ConstraintType.DATATYPE,
+      value: new Set([`${XSD}integer`]),
+      minExclusive: 18,
+      maxExclusive: 40,
+    });
+  });
+
+  it(`${name}: should parse sh:pattern and sh:flags facets`, async () => {
+    const SH = 'http://www.w3.org/ns/shacl#';
+    const RDF = 'http://www.w3.org/1999/02/22-rdf-syntax-ns#';
+    const XSD = 'http://www.w3.org/2001/XMLSchema#';
+
+    const patternProp = DF.blankNode('patternProp');
+
+    const quads = [
+      DF.quad(DF.namedNode(shapeIri), DF.namedNode(`${RDF}type`), DF.namedNode(`${SH}NodeShape`)),
+      DF.quad(DF.namedNode(shapeIri), DF.namedNode(`${SH}property`), patternProp),
+      DF.quad(patternProp, DF.namedNode(`${SH}path`), DF.namedNode('http://example.org/nickname')),
+      DF.quad(patternProp, DF.namedNode(`${SH}datatype`), DF.namedNode(`${XSD}string`)),
+      DF.quad(patternProp, DF.namedNode(`${SH}pattern`), DF.literal('^foo')),
+      DF.quad(patternProp, DF.namedNode(`${SH}flags`), DF.literal('i')),
+    ] as RDF.Quad[];
+
+    const shape = await shaclShapeFromQuads(populateFunction(quads), shapeIri);
+    expect(shape).not.toBeInstanceOf(Error);
+
+    const patternConstraint = (shape as IShape).get('http://example.org/nickname')?.constraint;
+    expect(patternConstraint).toStrictEqual<IConstraint>({
+      type: ConstraintType.DATATYPE,
+      value: new Set([`${XSD}string`]),
+      pattern: '^foo',
+      flags: 'i',
+    });
   });
 
   // ── sh:or ────────────────────────────────────────────────────────────────
@@ -317,14 +387,14 @@ describe.each([
         [`${LBDCVOC_PREFIX}hasCreator`, { min: 1, max: 1 }],
       ]);
 
-      const mapConstraint = new Map<string, IContraint | undefined>([
-        [TYPE_DEFINITION.value, { type: ConstraintType.TYPE, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
-        [`${LBDCVOC_PREFIX}id`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}long`]) }],
-        [`${LBDCVOC_PREFIX}creationDate`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}dateTime`]) }],
-        [`${LBDCVOC_PREFIX}locationIP`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}string`]) }],
-        [`${LBDCVOC_PREFIX}browserUsed`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}string`]) }],
-        [`${LBDCVOC_PREFIX}content`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}string`]) }],
-        [`${LBDCVOC_PREFIX}lenght`, { type: ConstraintType.TYPE, value: new Set([`${XSD_PREFIX}int`]) }],
+      const mapConstraint = new Map<string, IConstraint | undefined>([
+        [TYPE_DEFINITION.value, { type: ConstraintType.CLASS, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
+        [`${LBDCVOC_PREFIX}id`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}long`]) }],
+        [`${LBDCVOC_PREFIX}creationDate`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}dateTime`]) }],
+        [`${LBDCVOC_PREFIX}locationIP`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],
+        [`${LBDCVOC_PREFIX}browserUsed`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],
+        [`${LBDCVOC_PREFIX}content`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],
+        [`${LBDCVOC_PREFIX}lenght`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}int`]) }],
         [`${LBDCVOC_PREFIX}hasTag`, undefined],
         [`${LBDCVOC_PREFIX}isLocatedIn`, undefined],
         [`${LBDCVOC_PREFIX}hasCreator`, { type: ConstraintType.SHAPE, value: new Set(['http://example.com#Profile']) }],

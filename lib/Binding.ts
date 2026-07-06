@@ -1,5 +1,6 @@
-import { ConstraintType, IContraint, IPredicate, IShape, OneOfPathIndexed } from "./Shape";
+import { ConstraintType, IConstraint, IPredicate, IShape, OneOfPathIndexed } from "./Shape";
 import { IStarPatternWithDependencies, type ITriple, Triple } from "./Triple";
+import { TYPE_DEFINITION } from "./constant";
 
 /**
  * A binding from a query to a shape
@@ -114,10 +115,6 @@ export class Bindings implements IBindings {
         }
         const negatedTriples: ITriple[] = [];
         for (const { triple, dependencies } of starPattern.starPattern.values()) {
-            if (!this.closedShape) {
-                this.bindings.set(triple.predicate, triple);
-                continue;
-            }
             if (triple.predicate === Triple.NEGATIVE_PREDICATE_SET) {
                 negatedTriples.push(triple);
                 continue;
@@ -132,17 +129,19 @@ export class Bindings implements IBindings {
                 }
             }
 
-            if (singlePredicate === undefined &&
-                predicates.length === 0
-                && triple.isOptional !== true &&
-                !this.strict) {
-                this.unboundTriple.push(triple);
-            } else {
-                if (singlePredicate !== undefined) {
-                    predicates.push(singlePredicate);
+            if (singlePredicate === undefined && predicates.length === 0) {
+                // Open shapes can ignore unknown predicates, but closed shapes keep
+                // tracking unmatched non-optional predicates.
+                if (this.closedShape && triple.isOptional !== true && !this.strict) {
+                    this.unboundTriple.push(triple);
                 }
-                this.evaluateConstraint(predicates, triple, linkedShape, shape, dependencies);
+                continue;
             }
+
+            if (singlePredicate !== undefined) {
+                predicates.push(singlePredicate);
+            }
+            this.evaluateConstraint(predicates, triple, linkedShape, shape, dependencies);
 
 
 
@@ -169,7 +168,22 @@ export class Bindings implements IBindings {
         const uncontainedUnionStarPatterns: IStarPatternWithDependencies[] = []
 
         if (shape.closed === false) {
-            this.fullyBounded = starPattern.starPattern.size !== 0;
+            let boundedUnion = true;
+            for (const unionBinding of this.unionBindings) {
+                boundedUnion = ((unionBinding.hasOneContained && !this.strict) ||
+                    (this.strict && unionBinding.areAllContained)) && boundedUnion;
+                boundedUnionFull = boundedUnionFull && unionBinding.areAllContained;
+                if (!unionBinding.areAllContained) {
+                    for (const binding of unionBinding.bindings) {
+                        if (!binding.isFullyBounded()) {
+                            uncontainedUnionStarPatterns.push(binding.starPattern);
+                        }
+                    }
+                }
+            }
+            this.fullyBounded = this.getBoundTriple().length === starPattern.starPattern.size
+                && starPattern.starPattern.size !== 0
+                && boundedUnion;
         } else {
             let boundedUnion = true;
             for (const unionBinding of this.unionBindings) {
@@ -249,7 +263,7 @@ export class Bindings implements IBindings {
                 continue;
             }
 
-            const typeConstraintResult = Bindings.handleShapeType(constraint, triple);
+            const typeConstraintResult = Bindings.handleTypeConstraint(constraint, triple);
             if (typeConstraintResult === ConstraintResult.NOT_RESPECT) {
                 validConstraint = validConstraint || false;
                 continue;
@@ -303,7 +317,7 @@ export class Bindings implements IBindings {
     }
 
     private handleShapeConstraint(
-        constraint: IContraint,
+        constraint: IConstraint,
         triple: ITriple,
         linkedShape: Map<string, IShape>,
         currentShape: IShape,
@@ -338,42 +352,117 @@ export class Bindings implements IBindings {
         return ConstraintResult.INAPPLICABLE;
     }
 
-    private static handleShapeType(
-        constraint: IContraint,
+    private static handleTypeConstraint(
+        constraint: IConstraint,
         triple: ITriple): ConstraintResult {
-        if (constraint.type === ConstraintType.TYPE &&
-            !Array.isArray(triple.object) &&
-            triple.object.termType === "Literal"
-            && constraint.value.has(triple.object.datatype.value)
-        ) {
-            return ConstraintResult.RESPECT;
-        } else if (constraint.type === ConstraintType.TYPE &&
+        if (constraint.type === ConstraintType.CLASS &&
+            triple.predicate === TYPE_DEFINITION.value &&
             !Array.isArray(triple.object) &&
             triple.object.termType === "NamedNode"
             && constraint.value.has(triple.object.value)) {
             return ConstraintResult.RESPECT;
 
-        } else if (constraint.type === ConstraintType.TYPE &&
-            !Array.isArray(triple.object) &&
-            triple.object.termType === "Literal"
-            && !constraint.value.has(triple.object.datatype.value)) {
-            return ConstraintResult.NOT_RESPECT;
-        }
-        else if (constraint.type === ConstraintType.TYPE &&
+        } else if (constraint.type === ConstraintType.CLASS &&
+            triple.predicate === TYPE_DEFINITION.value &&
             !Array.isArray(triple.object) &&
             triple.object.termType === "NamedNode"
             && !constraint.value.has(triple.object.value)) {
             return ConstraintResult.NOT_RESPECT;
-        } else if (constraint.type === ConstraintType.TYPE &&
+        } else if (constraint.type === ConstraintType.CLASS &&
+            triple.predicate === TYPE_DEFINITION.value &&
             Array.isArray(triple.object)) {
             for (const object of triple.object) {
-                if (constraint.value.has(object.value) || (object.termType === "Literal" && constraint.value.has(object.datatype.value))) {
+                if (constraint.value.has(object.value)) {
                     return ConstraintResult.RESPECT;
                 }
             }
+            return ConstraintResult.NOT_RESPECT;
+        } else if (constraint.type === ConstraintType.CLASS && triple.predicate !== TYPE_DEFINITION.value) {
+            return ConstraintResult.NOT_RESPECT;
+        }
+
+        if (constraint.type === ConstraintType.DATATYPE &&
+            !Array.isArray(triple.object) &&
+            triple.object.termType === "Literal"
+            && constraint.value.has(triple.object.datatype.value)
+        ) {
+            if (!Bindings.respectNumericFacets(constraint, triple.object.value)) {
+                return ConstraintResult.NOT_RESPECT;
+            }
+            if (!Bindings.respectPatternFacet(constraint, triple.object.value)) {
+                return ConstraintResult.NOT_RESPECT;
+            }
+            return ConstraintResult.RESPECT;
+        } else if (constraint.type === ConstraintType.DATATYPE &&
+            !Array.isArray(triple.object) &&
+            triple.object.termType === "Literal"
+            && !constraint.value.has(triple.object.datatype.value)) {
+            return ConstraintResult.NOT_RESPECT;
+        } else if (constraint.type === ConstraintType.DATATYPE &&
+            Array.isArray(triple.object)) {
+            let hasDatatypeMatch = false;
+            for (const object of triple.object) {
+                if (object.termType === "Literal" && constraint.value.has(object.datatype.value)) {
+                    hasDatatypeMatch = true;
+                    if (!Bindings.respectNumericFacets(constraint, object.value)) {
+                        continue;
+                    }
+                    if (!Bindings.respectPatternFacet(constraint, object.value)) {
+                        continue;
+                    }
+                    return ConstraintResult.RESPECT;
+                }
+            }
+            if (hasDatatypeMatch) {
+                return ConstraintResult.NOT_RESPECT;
+            }
+            return ConstraintResult.NOT_RESPECT;
         }
 
         return ConstraintResult.INAPPLICABLE;
+    }
+
+    private static respectNumericFacets(constraint: IConstraint, literalValue: string): boolean {
+        const hasNumericFacet = constraint.minInclusive !== undefined
+            || constraint.maxInclusive !== undefined
+            || constraint.minExclusive !== undefined
+            || constraint.maxExclusive !== undefined;
+
+        if (!hasNumericFacet) {
+            return true;
+        }
+
+        const value = Number(literalValue);
+        if (Number.isNaN(value)) {
+            return false;
+        }
+
+        if (constraint.minInclusive !== undefined && value < constraint.minInclusive) {
+            return false;
+        }
+        if (constraint.maxInclusive !== undefined && value > constraint.maxInclusive) {
+            return false;
+        }
+        if (constraint.minExclusive !== undefined && value <= constraint.minExclusive) {
+            return false;
+        }
+        if (constraint.maxExclusive !== undefined && value >= constraint.maxExclusive) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static respectPatternFacet(constraint: IConstraint, literalValue: string): boolean {
+        if (constraint.pattern === undefined) {
+            return true;
+        }
+
+        try {
+            return new RegExp(constraint.pattern, constraint.flags).test(literalValue);
+        } catch {
+            return false;
+        }
     }
 
     public isFullyBounded(): boolean {

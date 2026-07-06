@@ -85,7 +85,6 @@ describe('query', () => {
         const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
         }
@@ -183,7 +182,6 @@ describe('query', () => {
         const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
         }
@@ -329,7 +327,6 @@ describe('query', () => {
         const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
         }
@@ -448,7 +445,6 @@ describe('query', () => {
         const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
         }
@@ -473,7 +469,7 @@ describe('query', () => {
                 RDF_TYPE,
                 {
                   triple: new Triple({
-                    subject: 'x', predicate: RDF_TYPE, object: [
+                    subject: 'x', predicate: RDF_TYPE, boundVariable: 'person', object: [
                       DF.namedNode('http://exemple.be/Person'),
                       DF.namedNode('http://exemple.be/Persoon')
                     ]
@@ -497,6 +493,7 @@ describe('query', () => {
                   triple: new Triple({
                     subject: 'y',
                     predicate: 'http://exemple.be',
+                    boundVariable: 'type',
                     object: [DF.namedNode('http://exemple.be/Post')]
                   }),
                   dependencies: undefined
@@ -517,7 +514,6 @@ describe('query', () => {
         const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
         }
@@ -616,7 +612,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -728,7 +723,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -839,7 +833,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -971,7 +964,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -1161,7 +1153,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -1270,7 +1261,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -1359,7 +1349,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -1448,7 +1437,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -1500,7 +1488,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -1577,7 +1564,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -2251,7 +2237,6 @@ describe('query', () => {
         expect(resp.union?.length).toBe(1);
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
         }
@@ -2262,7 +2247,6 @@ describe('query', () => {
           const expectedUnionStarPattern = everyExpectedStarPatternUnion[i];
 
           expect(union.starPatterns.size).toBe(expectedUnionStarPattern.size);
-          expect(union.filterExpression).toBe('');
           for (const [subject, starPatterns] of union.starPatterns) {
             const expectedStarPattern = expectedUnionStarPattern.get(subject);
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern!);
@@ -2399,7 +2383,6 @@ describe('query', () => {
         expect(resp.union?.length).toBe(1);
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
         }
@@ -2410,7 +2393,6 @@ describe('query', () => {
           const expectedUnionStarPattern = everyExpectedStarPatternUnion[i];
 
           expect(union.starPatterns.size).toBe(expectedUnionStarPattern.size);
-          expect(union.filterExpression).toBe('');
           for (const [subject, starPatterns] of union.starPatterns) {
             const expectedStarPattern = expectedUnionStarPattern.get(subject);
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern!);
@@ -2616,7 +2598,6 @@ describe('query', () => {
         expect(resp.union?.length).toBe(2);
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
         }
@@ -2630,7 +2611,6 @@ describe('query', () => {
             const expectedUnionStarPattern = everyExpectedStarPatternUnion[j];
 
             expect(union.starPatterns.size).toBe(expectedUnionStarPattern.size);
-            expect(union.filterExpression).toBe('');
             for (const [subject, starPatterns] of union.starPatterns) {
               const expectedStarPattern = expectedUnionStarPattern.get(subject);
               expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern!);
@@ -2825,7 +2805,6 @@ describe('query', () => {
         expect(resp.union?.length).toBe(1);
 
         expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-        expect(resp.filterExpression).toBe('');
         for (const [subject, starPatterns] of resp.starPatterns) {
           expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
         }
@@ -2836,7 +2815,6 @@ describe('query', () => {
           const expectedUnionStarPattern = everyExpectedStarPatternUnion[i];
 
           expect(union.starPatterns.size).toBe(expectedUnionStarPattern.size);
-          expect(union.filterExpression).toBe('');
           for (const [subject, starPatterns] of union.starPatterns) {
             const expectedStarPattern = expectedUnionStarPattern.get(subject);
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern!);
@@ -2852,7 +2830,6 @@ describe('query', () => {
           const expectedUnionStarPattern = everyExpectedStarPatternNestedUnion[i];
 
           expect(union.starPatterns.size).toBe(expectedUnionStarPattern.size);
-          expect(union.filterExpression).toBe('');
           for (const [subject, starPatterns] of union.starPatterns) {
             const expectedStarPattern = expectedUnionStarPattern.get(subject);
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern!);
@@ -3051,7 +3028,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -3336,7 +3312,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -3587,7 +3562,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -3708,7 +3682,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -3834,7 +3807,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -4042,7 +4014,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -4366,7 +4337,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -4488,7 +4458,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -4624,7 +4593,6 @@ describe('query', () => {
             },
           ];
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -4726,7 +4694,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -4832,7 +4799,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -4902,7 +4868,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -5007,7 +4972,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -5137,7 +5101,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -5231,7 +5194,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size + 1);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             if (subject === 'person') {
               continue;
@@ -5240,7 +5202,6 @@ describe('query', () => {
           }
 
           const personSujet = resp.starPatterns.get('person');
-          expect(personSujet?.filterExpression).toBeUndefined();
           expect(personSujet?.isVariable).toBe(true);
           expect(personSujet?.name).toBe('person');
           expect(personSujet?.starPattern.size).toBe(1);
@@ -5702,7 +5663,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject));
           }
@@ -5856,6 +5816,7 @@ describe('query', () => {
                     triple: new Triple({
                       subject: 'message',
                       predicate: RDF_TYPE,
+                      boundVariable: 'type',
                       object: [
                         DF.namedNode(`${SNVOC_PREFIX}Comment`),
                         DF.namedNode(`${SNVOC_PREFIX}Post`),
@@ -6027,7 +5988,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -6288,7 +6248,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
@@ -6375,6 +6334,7 @@ describe('query', () => {
                     triple: new Triple({
                       subject: 'message',
                       predicate: RDF_TYPE,
+                      boundVariable: 'type',
                       object: [DF.namedNode(`${SNVOC_PREFIX}Comment`), DF.namedNode(`${SNVOC_PREFIX}Post`)]
                     }),
                     dependencies: undefined
@@ -6516,7 +6476,6 @@ describe('query', () => {
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
-          expect(resp.filterExpression).toBe('');
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
