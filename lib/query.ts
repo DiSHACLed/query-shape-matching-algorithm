@@ -52,7 +52,7 @@ interface IShapeToQueryBuildContext {
 }
 
 /**
- * Best-effort translation from an IShape to an IQuery representation.
+ * Translation from an IShape to an IQuery representation.
  *
  * Supported mapping:
  * - Positive predicates -> triple patterns
@@ -60,7 +60,7 @@ interface IShapeToQueryBuildContext {
  * - SHAPE constraints -> dependent star patterns (when linked shapes are provided)
  * - oneOf/xone branches -> UNION branches
  *
- * Not represented on purpose:
+ * Not supported (yet):
  * - closed/open world semantics
  * - negative predicates
  */
