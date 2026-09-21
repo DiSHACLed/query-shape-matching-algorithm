@@ -3,7 +3,7 @@ import { toAlgebra } from '@traqula/algebra-sparql-1-1';
 import { describe, expect, it, test } from 'vitest';
 import { ConstraintType, IShape, Shape } from '../lib/Shape';
 import { IStarPatternWithDependencies, Triple } from '../lib/Triple';
-import { ContainmentResult, IContainmentResult, IResult, StarPatternName, solveShapeQueryContainment, solveShapeShapeContainment } from '../lib/containment';
+import { ContainmentResult, EmptyQueryError, IContainmentResult, IResult as ContainmentReport, StarPatternName, solveShapeQueryContainment, solveShapeShapeContainment } from '../lib/containment';
 import { DataFactory } from 'rdf-data-factory';
 import { BaseQuad } from '@rdfjs/types';
 import { IQuery, generateQuery } from '../lib/query';
@@ -18,6 +18,7 @@ import { shaclShapeFromQuads } from '../lib/shacl';
 const DF = new DataFactory<BaseQuad>();
 const n3Parser = new N3.Parser();
 const sparqlParser = new SPARQLParser();
+type IResult = Omit<ContainmentReport, 'result'>;
 
 describe('solveShapeQueryContainment', () => {
 
@@ -137,32 +138,36 @@ describe('solveShapeQueryContainment', () => {
          * General tests cases
          * *******************************************************************/
 
-        it('should return an empty result given an empty query and no shape', () => {
+        it('should throw given an empty query and no shape', () => {
             const query: IQuery = {
                 starPatterns: new Map()
             };
             const shapes: IShape[] = [];
-            const expectedResult: IResult = {
 
-                starPatternsContainment: new Map(),
-                visitShapeBoundedResource: new Map()
-            };
-
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+            // An empty query states no constraint, so no relevance degree can be assigned.
+            // Reporting CONTAINED here would rank every resource maximally relevant on no evidence.
+            expect(() => solveShapeQueryContainment({ query, shapes })).toThrow(EmptyQueryError);
         });
 
-        it('should reject every shape given an empty query', () => {
+        it('should throw given an empty query and candidate shapes', () => {
             const query: IQuery = {
                 starPatterns: new Map()
             };
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];
-            const expectedResult: IResult = {
 
-                starPatternsContainment: new Map(),
-                visitShapeBoundedResource: new Map(shapes.map((shape) => [shape.name, false]))
+            expect(() => solveShapeQueryContainment({ query, shapes })).toThrow(EmptyQueryError);
+        });
+
+        it('should report the discarded constructs when a query falls outside the profile', () => {
+            const query: IQuery = {
+                starPatterns: new Map([
+                    ["x", generateZStarPattern()]
+                ]),
+                unsupported: ['MINUS']
             };
+            const shapes: IShape[] = [shape];
 
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+            expect(solveShapeQueryContainment({ query, shapes }).unsupported).toStrictEqual(['MINUS']);
         });
 
         it('should return an empty result given no shape', () => {
@@ -896,6 +901,7 @@ describe('solveShapeQueryContainment', () => {
             expect(resp.starPatternsContainment.get("w")?.result).toBe(ContainmentResult.CONTAINED);
             expect(resp.starPatternsContainment.get("w1")?.result).toBe(ContainmentResult.CONTAINED);
             expect(resp.starPatternsContainment.get("w2")?.result).toBe(ContainmentResult.CONTAINED);
+            expect(resp.result).toBe(ContainmentResult.CONTAINED);
 
             expect(resp.visitShapeBoundedResource).toStrictEqual(new Map([
                 [shape.name, true],
@@ -933,7 +939,9 @@ describe('solveShapeQueryContainment', () => {
                 ])
             };
 
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+            const result = solveShapeQueryContainment({ query, shapes });
+            expect(result).toStrictEqual(expectedResult);
+            expect(result.result).toBe(ContainmentResult.UNALINGED);
 
         });
 
@@ -1058,6 +1066,7 @@ describe('solveShapeQueryContainment', () => {
             });
 
             expect(result.starPatternsContainment.get(sourceShape.name)?.result).toBe(ContainmentResult.CONTAINED);
+            expect(result.result).toBe(ContainmentResult.CONTAINED);
         });
 
         it('should support shape-to-shape containment with source linked shapes', () => {
@@ -1126,6 +1135,7 @@ describe('solveShapeQueryContainment', () => {
             });
 
             expect(result.starPatternsContainment.get(sourceShape.name)?.result).toBe(ContainmentResult.CONTAINED);
+            expect(result.result).toBe(ContainmentResult.CONTAINED);
         });
 
         function generateMatchingQuery(): IQuery {
@@ -1869,3 +1879,125 @@ describe('solveShapeQueryContainment', () => {
     })
 });
 
+
+describe('supported profile and explicit negation', () => {
+    const P = `PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+               PREFIX ex: <http://example.org/>`;
+
+    async function classify(rawQuery: string, rawShape: string): Promise<ContainmentResult> {
+        const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
+        const candidate = await shaclShapeFromQuads(new N3.Parser().parse(rawShape), 'http://example.org/S');
+        return solveShapeQueryContainment({ query, shapes: [candidate] }).result;
+    }
+
+    const SHAPE_PREFIXES = `@prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+        @prefix ex: <http://example.org/> .`;
+
+    const openNameShape = `${SHAPE_PREFIXES}
+        <http://example.org/S> a sh:NodeShape ;
+            sh:property [ sh:path foaf:name ] .`;
+
+    const closedNameShape = `${SHAPE_PREFIXES}
+        <http://example.org/S> a sh:NodeShape ;
+            sh:closed true ;
+            sh:property [ sh:path foaf:name ] .`;
+
+    describe('OPTIONAL patterns', () => {
+        const query = 'SELECT * WHERE { ?s foaf:name ?n . OPTIONAL { ?s ex:age ?a } }';
+
+        it('should not let an unmatched OPTIONAL pattern block containment on an open shape', async () => {
+            expect(await classify(query, openNameShape)).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should classify the same query identically on the closed counterpart of the shape', async () => {
+            expect(await classify(query, closedNameShape)).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should not consider a star pattern of only unmatched OPTIONAL patterns contained', async () => {
+            expect(await classify('SELECT * WHERE { OPTIONAL { ?s ex:email ?e } }', openNameShape))
+                .toBe(ContainmentResult.WEAKLY_REJECTED);
+        });
+    });
+
+    describe('discarded constructs', () => {
+        it('should not let a MINUS block lower the result', async () => {
+            expect(await classify('SELECT * WHERE { ?s foaf:name ?n . MINUS { ?s ex:age ?a } }', closedNameShape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should not let a MINUS block raise the result', async () => {
+            expect(await classify('SELECT * WHERE { ?s ex:unknown ?x . MINUS { ?s foaf:name ?n } }', closedNameShape))
+                .toBe(ContainmentResult.REJECTED);
+        });
+
+        it('should not let a SERVICE clause raise the result', async () => {
+            expect(await classify('SELECT * WHERE { ?s ex:unknown ?x . SERVICE <http://x.example/sp> { ?s foaf:name ?n } }', closedNameShape))
+                .toBe(ContainmentResult.REJECTED);
+        });
+
+        it('should record the discarded constructs on the query', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { ?s foaf:name ?n . MINUS { ?s ex:age ?a } }`)));
+            expect(query.unsupported).toStrictEqual(['MINUS']);
+        });
+
+        it('should throw when every triple pattern came from a discarded construct', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { SERVICE <http://x.example/sp> { ?s foaf:name ?n } }`)));
+            expect(query.starPatterns.size).toBe(0);
+            expect(query.unsupported).toStrictEqual(['SERVICE']);
+            expect(() => solveShapeQueryContainment({ query, shapes: [] })).toThrow(EmptyQueryError);
+        });
+    });
+
+    describe('queries that ask for every triple', () => {
+        // `?s ?p ?o` is maximally unselective rather than unanswerable: it asks for every triple of
+        // the resource, so any resource is relevant and the honest result is CONTAINED.
+        async function report(rawQuery: string) {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
+            const candidate = await shaclShapeFromQuads(new N3.Parser().parse(closedNameShape), 'http://example.org/S');
+            return { query, result: solveShapeQueryContainment({ query, shapes: [candidate] }) };
+        }
+
+        it('should report CONTAINED for an unrestricted triple pattern', async () => {
+            const { query, result } = await report('SELECT * WHERE { ?s ?p ?o }');
+            expect(query.matchesAnyTriple).toBe(true);
+            expect(query.unsupported).toBeUndefined();
+            expect(result.result).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should report CONTAINED for an unrestricted OPTIONAL triple pattern', async () => {
+            const { result } = await report('SELECT * WHERE { OPTIONAL { ?s ?p ?o } }');
+            expect(result.result).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should mark every candidate shape visitable, since the query wants all their triples', async () => {
+            const { result } = await report('SELECT * WHERE { ?s ?p ?o }');
+            expect([...result.visitShapeBoundedResource.values()]).toStrictEqual([true]);
+        });
+
+        it('should still throw when there is no triple pattern at all', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse('SELECT ?x WHERE { VALUES ?x { 1 2 } }')));
+            expect(query.matchesAnyTriple).toBeUndefined();
+            expect(() => solveShapeQueryContainment({ query, shapes: [] })).toThrow(EmptyQueryError);
+        });
+    });
+
+    describe('sh:not', () => {
+        const notShape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:property [ sh:path foaf:name ] ;
+                sh:not [ sh:path ex:secret ] .`;
+
+        it('should reject a predicate the shape explicitly forbids, even on an open shape', async () => {
+            expect(await classify('SELECT * WHERE { ?s ex:secret ?x }', notShape))
+                .toBe(ContainmentResult.REJECTED);
+        });
+
+        it('should still match the positive predicates of the same shape', async () => {
+            expect(await classify('SELECT * WHERE { ?s foaf:name ?n }', notShape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+    });
+});

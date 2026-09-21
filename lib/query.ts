@@ -25,6 +25,9 @@ type NpsPath = Omit<Algebra.Path, 'predicate'> & {
 
 interface IAccumulatedTriples { triples: Map<string, ITriple>, isVariable: boolean }
 
+/** Facts about the input discovered while walking the algebra, not carried by the star patterns. */
+interface INormalizationState { matchesAnyTriple: boolean }
+
 /**
  * A query divided into star patterns
  */
@@ -36,7 +39,25 @@ export interface IQuery {
   filters?: Algebra.Expression[];
   // VALUES bindings indexed by variable name
   values?: Map<string, Term[]>;
+  /**
+   * SPARQL constructs that were discarded during normalization because they are outside the
+   * supported profile. Discarding them can only over-estimate relevance, never discard a
+   * relevant resource, but it means the result approximates a sub-query of the given query.
+   */
+  unsupported?: UnsupportedConstruct[];
+  /**
+   * True when the query contained an unrestricted triple pattern (a variable predicate, as in
+   * `?s ?p ?o`). Such a pattern constrains nothing beyond "the resource holds triples", so it is
+   * not turned into a star pattern, but it is not a discarded construct either: it asks for every
+   * triple, which any resource can answer.
+   */
+  matchesAnyTriple?: boolean;
 }
+
+/**
+ * A SPARQL construct outside the supported profile, discarded during normalization.
+ */
+export type UnsupportedConstruct = 'MINUS' | 'SERVICE';
 
 export interface IShapeToQueryOptions {
   linkedShapes?: IShape[] | Map<string, IShape>;
@@ -381,10 +402,12 @@ export function generateQuery(algebraQuery: Algebra.Operation, optional?: boolea
   const accumulatedValues = new Map<string, Term[]>();
   const accumulatedUnion: IQuery[][] = [];
   const accumulatedFilters: Algebra.Expression[] = [];
+  const accumulatedUnsupported = new Set<UnsupportedConstruct>();
+  const state: INormalizationState = { matchesAnyTriple: false };
 
-  QueryHandler.collectFromAlgebra(algebraQuery, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, optional);
+  QueryHandler.collectFromAlgebra(algebraQuery, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, optional, accumulatedUnsupported, state);
 
-  return buildQuery(accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters);
+  return buildQuery(accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, accumulatedUnsupported, state);
 }
 
 /**
@@ -395,9 +418,17 @@ function buildQuery(
   values: Map<string, Term[]>,
   accumulatedUnion: IQuery[][],
   filters: Algebra.Expression[] = [],
+  unsupported: Set<UnsupportedConstruct> = new Set(),
+  state: INormalizationState = { matchesAnyTriple: false },
 ): IQuery {
   const innerQuery = new Map<string, IStarPatternWithDependencies>();
   const resp: IQuery = { starPatterns: innerQuery };
+  if (unsupported.size > 0) {
+    resp.unsupported = Array.from(unsupported);
+  }
+  if (state.matchesAnyTriple) {
+    resp.matchesAnyTriple = true;
+  }
   if (accumulatedUnion.length > 0) {
     resp.union = accumulatedUnion;
   }
@@ -536,14 +567,27 @@ namespace QueryHandler {
     accumulatedValues: Map<string, Term[]>,
     accumulatedUnion: IQuery[][],
     accumulatedFilters: Algebra.Expression[],
-    optional?: boolean
+    optional?: boolean,
+    unsupported: Set<UnsupportedConstruct> = new Set(),
+    state: INormalizationState = { matchesAnyTriple: false },
   ): void {
     algebraUtils.visitOperation(
       rootAlgebra,
       {
         [Algebra.Types.PATTERN]: {
           preVisitor: () => ({ continue: false }),
-          visitor: handlePattern(accumulatedTriples, optional),
+          visitor: handlePattern(accumulatedTriples, optional, () => { state.matchesAnyTriple = true; }),
+        },
+        // MINUS removes solutions and SERVICE evaluates elsewhere, so neither describes data the
+        // candidate resource must hold. Their triple patterns must not be collected as required
+        // patterns: doing so both inflates and deflates relevance.
+        [Algebra.Types.MINUS]: {
+          preVisitor: () => ({ continue: false }),
+          visitor: handleMinus(accumulatedTriples, accumulatedValues, accumulatedFilters, accumulatedUnion, unsupported, state, optional),
+        },
+        [Algebra.Types.SERVICE]: {
+          preVisitor: () => ({ continue: false }),
+          visitor: (): void => { unsupported.add('SERVICE'); },
         },
         [Algebra.Types.VALUES]: {
           preVisitor: () => ({ continue: false }),
@@ -555,7 +599,7 @@ namespace QueryHandler {
         },
         [Algebra.Types.LEFT_JOIN]: {
           preVisitor: () => ({ continue: false }),
-          visitor: handleLeftJoin(accumulatedTriples, accumulatedValues, accumulatedFilters, accumulatedUnion),
+          visitor: handleLeftJoin(accumulatedTriples, accumulatedValues, accumulatedFilters, accumulatedUnion, unsupported, state),
         },
         [Algebra.Types.PATH]: {
           preVisitor: () => ({ continue: false }),
@@ -572,19 +616,38 @@ namespace QueryHandler {
   }
 
   /**
+   * Keep the left operand of a MINUS and discard the right one: the removed patterns describe
+   * solutions to exclude, not data the candidate resource has to hold.
+   */
+  function handleMinus(accumulatedTriples: Map<string, IAccumulatedTriples>,
+    accumulatedValues: Map<string, Term[]>,
+    accumulatedFilters: Algebra.Expression[],
+    accumulatedUnion: IQuery[][],
+    unsupported: Set<UnsupportedConstruct>,
+    state: INormalizationState,
+    optional?: boolean): (element: Algebra.Minus) => void {
+    return (element: Algebra.Minus): void => {
+      unsupported.add('MINUS');
+      collectFromAlgebra(element.input[0], accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, optional, unsupported, state);
+    }
+  }
+
+  /**
    * Split a LEFT JOIN into required and optional branches and collect both with the right optional flag.
    */
   function handleLeftJoin(accumulatedTriples: Map<string, IAccumulatedTriples>,
     accumulatedValues: Map<string, Term[]>,
     accumulatedFilters: Algebra.Expression[],
-    accumulatedUnion: IQuery[][]): (element: Algebra.LeftJoin) => void {
+    accumulatedUnion: IQuery[][],
+    unsupported: Set<UnsupportedConstruct>,
+    state: INormalizationState): (element: Algebra.LeftJoin) => void {
     return (element: Algebra.LeftJoin): void => {
       const joinElement = element.input;
       const requiredElements = joinElement[0];
       const optionalElements = joinElement[1];
 
-      collectFromAlgebra(requiredElements, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters);
-      collectFromAlgebra(optionalElements, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, true);
+      collectFromAlgebra(requiredElements, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, undefined, unsupported, state);
+      collectFromAlgebra(optionalElements, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, true, unsupported, state);
     }
   }
 
@@ -666,12 +729,18 @@ namespace QueryHandler {
    */
   function handlePattern(
     accumulatedTriples: Map<string, IAccumulatedTriples>,
-    optional?: boolean
+    optional?: boolean,
+    wildcard?: () => void,
   ): (element: Algebra.Pattern) => void {
     return (quad: Algebra.Pattern): void => {
       const subject = quad.subject as Term;
       const predicate = quad.predicate as Term;
       const object = quad.object as Term;
+      if (predicate.termType !== 'NamedNode') {
+        // Shapes constrain named predicates, so an unrestricted pattern yields no star pattern.
+        // It still asks for every triple of the resource, which is recorded separately.
+        wildcard?.();
+      }
       if (predicate.termType === 'NamedNode') {
         const startPattern = accumulatedTriples.get(subject.value);
         const triple: ITriple = new Triple({

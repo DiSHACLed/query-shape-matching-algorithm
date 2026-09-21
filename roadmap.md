@@ -82,3 +82,5 @@
 
 - Even without full aggregates, repeated triple patterns and path multiplicities can sometimes imply minimum multiplicity.
 - SHACL cardinalities could be compared against that more aggressively.
+
+16. Add support for SHACL targets (sh:targetClass, sh:targetNode, sh:targetSubjectsOf, sh:targetObjectsOf)

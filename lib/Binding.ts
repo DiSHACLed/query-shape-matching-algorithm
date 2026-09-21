@@ -25,7 +25,14 @@ export interface IBindings {
      */
     shouldVisitShape: () => boolean;
     /**
-     * 
+     * Indicate that the shape explicitly forbids a predicate required by the star pattern
+     * (SHACL sh:not / ShEx negative triple constraint). This is definitive evidence of
+     * incompatibility, independently of whether the shape is closed.
+     * @returns {boolean} whether the shape contradicts a required triple pattern
+     */
+    hasNegativeContradiction: () => boolean;
+    /**
+     *
      * Return the unbounded triples
      * @returns {ITriple[]} The binded triples 
      */
@@ -85,6 +92,7 @@ export class Bindings implements IBindings {
     private shapePredicateBind = new Map<string, boolean>();
     private strict: boolean;
     private allOptional = true;
+    private negativeContradiction = false;
     private typeOfContainment: IContainmentType = { result: ContainmentType.NONE, unContaineStarPattern: [] };
     private alreadyTraversed: Map<string, boolean>;
     public readonly starPattern: IStarPatternWithDependencies;
@@ -119,7 +127,11 @@ export class Bindings implements IBindings {
                 negatedTriples.push(triple);
                 continue;
             }
-            const singlePredicate = shape.get(triple.predicate);
+            const declaredPredicate = shape.get(triple.predicate);
+            // A predicate declared under sh:not (ShEx: a negative triple constraint) states that
+            // conforming data must NOT carry it, so it can never satisfy a triple pattern.
+            const negatedByShape = declaredPredicate?.negative === true;
+            const singlePredicate = negatedByShape ? undefined : declaredPredicate;
             let predicates: IPredicate[] = [];
             // check if the triple match a disjunction
             for (const oneOfBinding of this.oneOfs) {
@@ -130,9 +142,12 @@ export class Bindings implements IBindings {
             }
 
             if (singlePredicate === undefined && predicates.length === 0) {
-                // Open shapes can ignore unknown predicates, but closed shapes keep
-                // tracking unmatched non-optional predicates.
-                if (this.closedShape && triple.isOptional !== true && !this.strict) {
+                // A shape that explicitly forbids the predicate contradicts the triple pattern
+                // whether or not it is closed; an open shape merely stays silent about unknown ones.
+                if (negatedByShape && triple.isOptional !== true && !this.strict) {
+                    this.negativeContradiction = true;
+                }
+                if ((negatedByShape || this.closedShape) && triple.isOptional !== true && !this.strict) {
                     this.unboundTriple.push(triple);
                 }
                 continue;
@@ -181,9 +196,7 @@ export class Bindings implements IBindings {
                     }
                 }
             }
-            this.fullyBounded = this.getBoundTriple().length === starPattern.starPattern.size
-                && starPattern.starPattern.size !== 0
-                && boundedUnion;
+            this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion;
         } else {
             let boundedUnion = true;
             for (const unionBinding of this.unionBindings) {
@@ -198,7 +211,7 @@ export class Bindings implements IBindings {
                     }
                 }
             }
-            this.fullyBounded = this.unboundTriple.length === 0 && starPattern.starPattern.size !== 0 && boundedUnion;
+            this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion;
         }
         if (this.fullyBounded) {
             const cycle = new Set<string>();
@@ -237,6 +250,29 @@ export class Bindings implements IBindings {
         } else {
             this.typeOfContainment = { result: ContainmentType.PARTIAL, unContaineStarPattern: uncontainedUnionStarPatterns };
         }
+    }
+
+    /**
+     * A star pattern is fully bound when every *required* triple pattern binds.
+     * OPTIONAL triple patterns (and shape properties with sh:minCount 0) are not needed to answer
+     * the query, so they never block containment — this rule is the same for open and closed shapes.
+     * At least one triple must bind, so a star pattern made only of unmatched optional patterns
+     * is not considered contained.
+     */
+    private isEveryRequiredTripleBound(starPattern: IStarPatternWithDependencies): boolean {
+        if (starPattern.starPattern.size === 0) {
+            return false;
+        }
+        let boundCount = 0;
+        for (const { triple } of starPattern.starPattern.values()) {
+            const isBound = this.bindings.get(triple.predicate) !== undefined;
+            if (isBound) {
+                boundCount++;
+            } else if (triple.isOptional !== true) {
+                return false;
+            }
+        }
+        return boundCount > 0;
     }
 
     private evaluateConstraint(predicates: IPredicate[],
@@ -493,6 +529,10 @@ export class Bindings implements IBindings {
 
     public shouldVisitShape(): boolean {
         return this.getBoundTriple().length > 0;
+    }
+
+    public hasNegativeContradiction(): boolean {
+        return this.negativeContradiction;
     }
 
     public getNestedContainedStarPatternName(): IDependentStarPattern[] {

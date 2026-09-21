@@ -1,5 +1,5 @@
 import { Bindings, ContainmentType, IBindings } from './Binding'
-import { generateStarPatternUnion, shapeToQuery, type IQuery } from './query';
+import { generateStarPatternUnion, shapeToQuery, type IQuery, type UnsupportedConstruct } from './query';
 import { ConstraintType, IConstraint, IShape } from './Shape';
 import type { IStarPatternWithDependencies } from './Triple';
 import type { Term } from '@rdfjs/types';
@@ -12,6 +12,20 @@ import type { Term } from '@rdfjs/types';
  * @returns {IResult} result relative to the containement of the query inside of the shape
  */
 export function solveShapeQueryContainment({ query, shapes, decidingShapes }: IContainementArg): IResult {
+  if (query.starPatterns.size === 0) {
+    // A query whose only triple patterns are unrestricted (?s ?p ?o) asks for every triple of the
+    // resource, so every resource is relevant and every shape is worth visiting. That is a real
+    // answer, not a failure: the query is maximally unselective, which is a property of the query.
+    if (query.matchesAnyTriple === true) {
+      return buildMatchesAnyTripleResult(shapes, query.unsupported);
+    }
+    // A query with no triple pattern at all (an empty WHERE, VALUES/FILTER only, or a body made
+    // solely of discarded constructs) never asks the resource for data, so relevance is undefined.
+    throw new EmptyQueryError(
+      'the normalized query has no triple pattern, so no relevance degree can be assigned' +
+      (query.unsupported !== undefined ? `; discarded constructs: ${query.unsupported.join(', ')}` : ''),
+    );
+  }
   const bindingResult = new Map<ShapeName, Map<StarPatternName, IBindingStatus>>();
   const starPatternsContainment = new Map<StarPatternName, IContainmentResult>();
   const classificationStats = new Map<StarPatternName, IContainmentStats>();
@@ -71,11 +85,41 @@ export function solveShapeQueryContainment({ query, shapes, decidingShapes }: IC
     starPatternsContainment.set(starPatternName, currentResult);
   }
 
-  return {
+  const report: Omit<IResult, 'result'> = {
     starPatternsContainment,
-    visitShapeBoundedResource: generateVisitStatus(bindingResult, shapes)
+    visitShapeBoundedResource: generateVisitStatus(bindingResult, shapes),
+    ...(query.unsupported !== undefined ? { unsupported: query.unsupported } : {}),
   };
 
+  Object.defineProperty(report, 'result', {
+    value: getQueryContainmentResult(starPatternsContainment),
+    enumerable: false,
+    writable: false,
+  });
+
+  return report as IResult;
+
+}
+
+/**
+ * Report for a query that asks for every triple of a resource: contained by any shape, and every
+ * shape is visitable. Marking the shapes visitable matters — a CONTAINED result whose visit
+ * indications were all false would tell a client to fetch nothing for a query that wants everything.
+ */
+function buildMatchesAnyTripleResult(shapes: IShape[], unsupported?: UnsupportedConstruct[]): IResult {
+  const report: Omit<IResult, 'result'> = {
+    starPatternsContainment: new Map(),
+    visitShapeBoundedResource: new Map(shapes.map(shape => [shape.name, true])),
+    ...(unsupported !== undefined ? { unsupported } : {}),
+  };
+
+  Object.defineProperty(report, 'result', {
+    value: ContainmentResult.CONTAINED,
+    enumerable: false,
+    writable: false,
+  });
+
+  return report as IResult;
 }
 
 export interface IShapeContainmentArg {
@@ -111,13 +155,16 @@ function updateContainmentStats(
   }
 
   const stats = classificationStats.get(starPatternName)!;
-  if (shape.closed) {
+  // A shape that explicitly forbids a required predicate (sh:not) proves incompatibility, so it
+  // must not count as the "open shape" that would soften REJECTED into WEAKLY_REJECTED.
+  const contradicts = bindings.hasNegativeContradiction();
+  if (shape.closed || contradicts) {
     stats.hasClosedShape = true;
   } else {
     stats.hasOpenShape = true;
   }
 
-  if (!filterCompatible) {
+  if (!filterCompatible || contradicts) {
     return;
   }
 
@@ -951,10 +998,29 @@ export type ShapeName = string;
  * The result of the alignment
  */
 export interface IResult {
+  // The aggregate containment result for the complete query or source shape.
+  result: ContainmentResult;
   // The documents associated with a shape that can be followed
   visitShapeBoundedResource: Map<ShapeName, boolean>;
   // The type of containment of each star patterns with there associated shapes
   starPatternsContainment: Map<StarPatternName, IContainmentResult>;
+  /**
+   * Constructs of the input that were discarded because they are outside the supported profile.
+   * When non-empty, the result was computed over a sub-query of the given query and therefore
+   * over-estimates relevance.
+   */
+  unsupported?: UnsupportedConstruct[];
+}
+
+/**
+ * Raised when the normalized input has no star pattern, so there is no constraint to assess.
+ * Returning a relevance degree in that case would rank every resource on no evidence at all.
+ */
+export class EmptyQueryError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'EmptyQueryError';
+  }
 }
 
 /**
@@ -988,4 +1054,16 @@ export enum ContainmentResult {
   WEAKLY_REJECTED,
   // No triple matches and all candidate shapes are closed.
   REJECTED,
+}
+
+function getQueryContainmentResult(
+  starPatternsContainment: Map<StarPatternName, IContainmentResult>,
+): ContainmentResult {
+  let queryResult = ContainmentResult.CONTAINED;
+
+  for (const { result } of starPatternsContainment.values()) {
+    queryResult = Math.max(queryResult, result);
+  }
+
+  return queryResult;
 }

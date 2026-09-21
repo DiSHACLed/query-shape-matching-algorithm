@@ -26,9 +26,9 @@ npm install query-shape-detection
 yarn add query-shape-detection
 ```
 
-## Example Code
+## Code examples
 
-### Simple SHACL Example
+### SPARQL-to-SHACL Example
 
 ```ts
 import { 
@@ -69,74 +69,88 @@ const report = solveShapeQueryContainment({
     shapes: [personShape],
 });
 
-console.log(report.starPatternsContainment.get("person"));
+// 4. Read the global result for the complete query.
+console.log(report.result); // ContainmentResult.CONTAINED
+
+// 5. Inspect how the global result was obtained by checking every query star pattern.
+for (const [starPatternName, containment] of report.starPatternsContainment) {
+  console.log(starPatternName);       // "person"
+  console.log(containment.result);    // ContainmentResult.CONTAINED
+  console.log(containment.target);    // ["http://example.org/PersonShape"]
+  console.log(containment.bindings);  // Detailed predicate/dependency matches
+}
 ```
 
-### Simple ShEx Example
-
-```ts
-import { shexShapeFromQuads } from 'query-shape-detection';
-
-// Parsing a ShEx shape follows the same pattern
-const shexQuads = /* RDF quads from ShEx definition */;
-const personShape = await shexShapeFromQuads(shexQuads, "http://example.org/PersonShape");
-```
+`report.result` is the aggregate result for the complete query. It is
+`CONTAINED` only when every star pattern is also `CONTAINED`; otherwise it reports the most restrictive result among the star patterns.
 
 ### Shape-to-Shape Example
 
 You can compare a source shape against candidate target shapes directly using
-`solveShapeShapeContainment`. Internally, this uses a best-effort shape-to-query
-translation and then reuses the existing query-to-shape containment engine.
+`solveShapeShapeContainment`. Internally, this uses a shape-to-query translation and then reuses the existing query-to-shape containment engine.
 
 ```ts
 import {
-  Shape,
-  ConstraintType,
+  shaclShapeFromQuads,
   solveShapeShapeContainment,
 } from 'query-shape-detection';
+import * as N3 from 'n3';
 
-const sourceShape = new Shape({
-  name: 'https://www.example.ca/source',
-  positivePredicates: [
-    {
-      name: 'https://www.example.ca/age',
-      constraint: {
-        type: ConstraintType.DATATYPE,
-        value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
-        minInclusive: 18,
-        maxInclusive: 35,
-      },
-    },
-  ],
-  closed: true,
-});
+const sourceShapeRaw = `
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix ex: <https://www.example.org/> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
-const targetShape = new Shape({
-  name: 'https://www.example.ca/target',
-  positivePredicates: [
-    {
-      name: 'https://www.example.ca/age',
-      constraint: {
-        type: ConstraintType.DATATYPE,
-        value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
-        minInclusive: 10,
-        maxInclusive: 40,
-      },
-    },
-  ],
-  closed: true,
-});
+  ex:SourceShape a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+      sh:path ex:age ;
+      sh:datatype xsd:integer ;
+      sh:minInclusive 18 ;
+      sh:maxInclusive 35
+    ] .
+`;
+
+const targetShapeRaw = `
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix ex: <https://www.example.org/> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  ex:TargetShape a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+      sh:path ex:age ;
+      sh:datatype xsd:integer ;
+      sh:minInclusive 10 ;
+      sh:maxInclusive 40
+    ] .
+`;
+
+const sourceShape = await shaclShapeFromQuads(
+  new N3.Parser().parse(sourceShapeRaw),
+  'https://www.example.org/SourceShape',
+);
+const targetShape = await shaclShapeFromQuads(
+  new N3.Parser().parse(targetShapeRaw),
+  'https://www.example.org/TargetShape',
+);
 
 const report = solveShapeShapeContainment({
   sourceShape,
   targetShapes: [targetShape],
 });
 
-console.log(report.starPatternsContainment.get(sourceShape.name));
-```
+// Read the global result for the complete source-shape/target-shape comparison.
+console.log(report.result); // ContainmentResult.CONTAINED
 
-For source shapes with nested `sh:node` / shape-link constraints, pass their linked
-definitions in `sourceLinkedShapes`.
+// Inspect the individual result for every star pattern generated from the source shape.
+for (const [starPatternName, containment] of report.starPatternsContainment) {
+  console.log(starPatternName);
+  console.log(containment.result);    // ContainmentResult.CONTAINED
+  console.log(containment.target);    // ["https://www.example.org/TargetShape"]
+  console.log(containment.bindings);  // Detailed predicate/dependency matches
+}
+```
 
 ## Containment Results
 
@@ -208,9 +222,7 @@ Another `CONTAINED` case combines a FILTER expression with compatible shape cons
   ```
 
 Containment decisions do not use runtime FILTER truth values directly.
-Instead, FILTER expressions are only used when they can be checked against shape constraints.
-For example, a numeric comparison like `?age > 18` is compatible with an `xsd:integer` constraint,
-but can contradict a non-numeric datatype constraint.
+Instead, FILTER expressions are only used when they can be checked against shape constraints. For example, a numeric comparison like `?age > 18` is compatible with an `xsd:integer` constraint, but can contradict a non-numeric datatype constraint.
 
 #### 2. `ALIGNED`
 
@@ -312,17 +324,19 @@ Another `UNALINGED` case is when the root star pattern does not match, but a nes
     sh:property [ sh:path foaf:name ] .
   ```
 
-Another `UNALINGED` case with FILTER and constraints:
+Another `UNALINGED` case occurs when the root pattern does not match, but an
+optional nested star pattern reachable through a linked variable does.
 
 * **Query**:
 
   ```sparql
-  PREFIX ex: <https://www.example.ca/>
-  PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+  PREFIX ex: <http://example.org/>
+  PREFIX foaf: <http://xmlns.com/foaf/0.1/>
   SELECT * WHERE {
-    ?person ex:age ?age ;
-            ex:status ?status .
-    FILTER(?age > 18)
+    ?person ex:unknownLink ?friend .
+    OPTIONAL {
+      ?friend foaf:name ?friendName .
+    }
   }
   ```
 
@@ -330,17 +344,23 @@ Another `UNALINGED` case with FILTER and constraints:
 
   ```turtle
   @prefix sh: <http://www.w3.org/ns/shacl#> .
-  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+  @prefix ex: <http://example.org/> .
 
-  <http://example.org/ClosedAgeShape> a sh:NodeShape ;
+  ex:PersonShape a sh:NodeShape ;
     sh:closed true ;
     sh:property [
-      sh:path <https://www.example.ca/age> ;
-      sh:datatype xsd:integer
+      sh:path ex:knows ;
+      sh:node ex:FriendShape
     ] .
+
+  ex:FriendShape a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [ sh:path foaf:name ] .
   ```
 
-On a closed shape, `ex:age` matches but `ex:status` does not, so containment is partial (`UNALINGED`) even though the FILTER is constraint-compatible.
+The required root `ex:unknownLink` pattern does not match the shape, but the
+optional nested `foaf:name` pattern matches `ex:FriendShape`. The root result is
+therefore `UNALINGED` because only a nested star pattern is aligned.
 
 #### 4. `WEAKLY_REJECTED`
 
@@ -362,15 +382,18 @@ No triple pattern matches and at least one candidate shape is open.
     sh:property [ sh:path foaf:name ] .
   ```
 
-Another `WEAKLY_REJECTED` case with FILTER and constraints:
+Another `WEAKLY_REJECTED` case has only optional predicates, none of which are
+defined by an open shape:
 
 * **Query**:
 
   ```sparql
-  PREFIX ex: <https://www.example.ca/>
+  PREFIX ex: <http://example.org/>
   SELECT * WHERE {
-    ?person ex:age ?age .
-    FILTER(?age > 18)
+    OPTIONAL {
+      ?person ex:email ?email ;
+              ex:phone ?phone .
+    }
   }
   ```
 
@@ -378,20 +401,21 @@ Another `WEAKLY_REJECTED` case with FILTER and constraints:
 
   ```turtle
   @prefix sh: <http://www.w3.org/ns/shacl#> .
-  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+  @prefix ex: <http://example.org/> .
 
-  <http://example.org/OpenStringAgeShape> a sh:NodeShape ;
+  ex:PersonShape a sh:NodeShape ;
     sh:property [
-      sh:path <https://www.example.ca/age> ;
-      sh:datatype xsd:string
+      sh:path ex:name
     ] .
   ```
 
-The numeric FILTER contradicts the string datatype constraint. Because the shape is open, the result is `WEAKLY_REJECTED`.
+Neither optional predicate is defined by the open shape, so no triple pattern
+matches. Because the shape is open, the result is `WEAKLY_REJECTED` rather than
+`REJECTED`.
 
 #### 5. `REJECTED`
 
-The query uses `schema:birthDate`, but the shape only defines `foaf:name`.
+The query uses `schema:birthDate`, but the closed shape only defines `foaf:name`.
 
 * **Query**:
 
