@@ -2001,3 +2001,151 @@ describe('supported profile and explicit negation', () => {
         });
     });
 });
+
+describe('dependency-only shapes', () => {
+    // `dependentShapes` carries shapes that are not candidates themselves but are referenced by
+    // sh:node from a candidate. They must be resolvable, otherwise the constraint is treated as
+    // satisfied (Bindings.handleShapeConstraint returns RESPECT for an unknown linked shape) and
+    // the root star pattern binds on a dependency that was never checked.
+    const shapesTtl = `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+        @prefix ex: <http://example.org/> .
+
+        ex:A a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path ex:knows ; sh:node ex:B ] .
+
+        ex:B a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path foaf:name ] .`;
+
+    // Same shapes with ex:A open. Resolving sh:node only asks whether the nested star pattern is
+    // fully bound by ex:B, so ex:B's own openness never changes the outcome; ex:A's does, because
+    // it decides between the two rejection degrees once the root triple fails to bind.
+    const openRootShapesTtl = shapesTtl.replace('ex:A a sh:NodeShape ; sh:closed true ;', 'ex:A a sh:NodeShape ;');
+
+    const PREFIXES = `PREFIX foaf: <http://xmlns.com/foaf/0.1/> PREFIX ex: <http://example.org/>`;
+
+    async function rootResultFor(rawQuery: string, useDependentShapes: boolean, ttl: string = shapesTtl): Promise<ContainmentResult> {
+        const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${PREFIXES} ${rawQuery}`)));
+        const quads = new N3.Parser().parse(ttl);
+        const candidate = await shaclShapeFromQuads(quads, 'http://example.org/A');
+        const linked = await shaclShapeFromQuads(quads, 'http://example.org/B');
+        const report = solveShapeQueryContainment({
+            query,
+            shapes: [candidate],
+            ...(useDependentShapes ? { dependentShapes: [linked] } : {}),
+        });
+        return report.starPatternsContainment.get('p')!.result;
+    }
+
+    const nonFitting = 'SELECT * WHERE { ?p ex:knows ?f . ?f ex:somethingElse ?x }';
+    const fitting = 'SELECT * WHERE { ?p ex:knows ?f . ?f foaf:name ?n }';
+
+    it('should check the dependency when the referenced shape is supplied', async () => {
+        expect(await rootResultFor(nonFitting, true)).toBe(ContainmentResult.REJECTED);
+    });
+
+    it('should bind the root when the nested pattern fits the referenced shape', async () => {
+        expect(await rootResultFor(fitting, true)).toBe(ContainmentResult.CONTAINED);
+    });
+
+    it('should weakly reject rather than reject when the referring shape is open', async () => {
+        expect(await rootResultFor(nonFitting, true, openRootShapesTtl)).toBe(ContainmentResult.WEAKLY_REJECTED);
+    });
+
+    it('should bind the root on a fitting nested pattern whatever the referring shape is', async () => {
+        expect(await rootResultFor(fitting, true, openRootShapesTtl)).toBe(ContainmentResult.CONTAINED);
+    });
+
+    it('should over-estimate when the referenced shape is unavailable', async () => {
+        // Documents the remaining approximation: with no way to resolve ex:B the sh:node
+        // constraint cannot be refuted, so the root binds even though the nested pattern does not fit.
+        expect(await rootResultFor(nonFitting, false)).toBe(ContainmentResult.CONTAINED);
+    });
+});
+
+describe('nested dependencies and partial matches', () => {
+    // ex:PersonShape is closed and declares foaf:knows, constrained by sh:node ex:FriendShape.
+    // Whether the nested pattern is refuted depends on ex:FriendShape: closed, it forbids anything
+    // it does not declare; open, it is merely silent.
+    const shapesTtl = (friendClosed: boolean) => `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+        @prefix ex: <http://example.org/> .
+
+        ex:PersonShape a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path foaf:knows ; sh:node ex:FriendShape ] .
+
+        ex:FriendShape a sh:NodeShape ; ${friendClosed ? 'sh:closed true ;' : ''}
+            sh:property [ sh:path foaf:name ] .`;
+
+    const PREFIXES = `PREFIX foaf: <http://xmlns.com/foaf/0.1/> PREFIX ex: <http://example.org/>`;
+    // foaf:mbox is not declared by ex:FriendShape; foaf:name is.
+    const NOT_DECLARED = 'SELECT * WHERE { ?p foaf:knows ?f . ?f foaf:mbox ?m }';
+    const DECLARED = 'SELECT * WHERE { ?p foaf:knows ?f . ?f foaf:name ?n }';
+
+    async function classify(rawQuery: string, friendClosed: boolean, asDependency: boolean) {
+        const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${PREFIXES} ${rawQuery}`)));
+        const quads = new N3.Parser().parse(shapesTtl(friendClosed));
+        const person = await shaclShapeFromQuads(quads, 'http://example.org/PersonShape');
+        const friend = await shaclShapeFromQuads(quads, 'http://example.org/FriendShape');
+        const report = asDependency
+            ? solveShapeQueryContainment({ query, shapes: [person], dependentShapes: [friend] })
+            : solveShapeQueryContainment({ query, shapes: [person, friend] });
+        return {
+            root: report.starPatternsContainment.get('p')!.result,
+            nested: report.starPatternsContainment.get('f')!.result,
+            aggregate: report.result,
+        };
+    }
+
+    describe('a dependency that is undecided rather than refuted', () => {
+        it('should leave the root partially matched on the closed referring shape', async () => {
+            // foaf:knows is declared by the closed ex:PersonShape, so the root pattern did match it.
+            // Only the nested pattern is unresolved, and open ex:FriendShape does not forbid it.
+            for (const asDependency of [true, false]) {
+                const { root } = await classify(NOT_DECLARED, false, asDependency);
+                expect(root).toBe(ContainmentResult.UNALINGED);
+            }
+        });
+
+        it('should not make the resource omittable', async () => {
+            for (const asDependency of [true, false]) {
+                const { aggregate } = await classify(NOT_DECLARED, false, asDependency);
+                expect(aggregate).toBe(ContainmentResult.WEAKLY_REJECTED);
+                expect(aggregate).not.toBe(ContainmentResult.REJECTED);
+            }
+        });
+    });
+
+    describe('a dependency that is genuinely refuted', () => {
+        it('should stay rejected, so a closed shape graph can still prune', async () => {
+            for (const asDependency of [true, false]) {
+                const { root, aggregate } = await classify(NOT_DECLARED, true, asDependency);
+                expect(root).toBe(ContainmentResult.REJECTED);
+                expect(aggregate).toBe(ContainmentResult.REJECTED);
+            }
+        });
+    });
+
+    describe('a nested pattern governed by a dependency-only shape', () => {
+        it('should be classified against the shape that governs it, not only the candidates', async () => {
+            // Without this the nested pattern is judged against ex:PersonShape alone, which never
+            // describes it, and a fully satisfiable query comes out REJECTED.
+            for (const friendClosed of [false, true]) {
+                const { nested, aggregate } = await classify(DECLARED, friendClosed, true);
+                expect(nested).toBe(ContainmentResult.CONTAINED);
+                expect(aggregate).toBe(ContainmentResult.CONTAINED);
+            }
+        });
+
+        it('should classify identically however the referenced shape is passed', async () => {
+            for (const query of [NOT_DECLARED, DECLARED]) {
+                for (const friendClosed of [false, true]) {
+                    expect(await classify(query, friendClosed, true))
+                        .toStrictEqual(await classify(query, friendClosed, false));
+                }
+            }
+        });
+    });
+});

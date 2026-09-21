@@ -32,6 +32,20 @@ export interface IBindings {
      */
     hasNegativeContradiction: () => boolean;
     /**
+     * Indicate that an sh:node dependency of a matched predicate was neither established nor
+     * refuted, because the referenced shape is open and simply does not describe the nested
+     * pattern. The predicate itself matched this shape, so the star pattern is partially matched.
+     * @returns {boolean} whether a dependency was left undecided rather than refuted
+     */
+    hasNonRefutedDependency: () => boolean;
+    /**
+     * Shapes that nested star patterns were resolved against while checking sh:node constraints.
+     * A referenced shape governs its nested star pattern even when it is not a candidate shape
+     * itself, so its open or closed status is evidence for that pattern's classification.
+     * @returns {IDependencyEvidence[]} one entry per nested star pattern and referenced shape
+     */
+    getDependencyEvidence: () => IDependencyEvidence[];
+    /**
      *
      * Return the unbounded triples
      * @returns {ITriple[]} The binded triples 
@@ -71,6 +85,22 @@ export enum ConstraintResult {
     NOT_RESPECT
 }
 
+/**
+ * A shape a nested star pattern was resolved against while checking an sh:node constraint, and
+ * what the nested pattern did against it. The referenced shape governs that pattern, so this is
+ * the evidence its classification has to be based on.
+ */
+export interface IDependencyEvidence {
+    starPatternName: string;
+    shapeName: string;
+    closed: boolean;
+    /** The nested pattern bound at least one triple against the referenced shape. */
+    hasMatch: boolean;
+    /** The nested pattern is fully bound by the referenced shape. */
+    contained: boolean;
+    bindings: IBindings;
+}
+
 export interface IContainmentType {
     result: ContainmentType;
     unContaineStarPattern?: IStarPatternWithDependencies[];
@@ -93,6 +123,10 @@ export class Bindings implements IBindings {
     private strict: boolean;
     private allOptional = true;
     private negativeContradiction = false;
+    // Predicates whose sh:node dependency was not established, but not refuted either.
+    private nonRefutedDependency = new Set<string>();
+    // Per nested star pattern, the shapes it was resolved against while checking sh:node.
+    private dependencyEvidence = new Map<string, IDependencyEvidence[]>();
     private typeOfContainment: IContainmentType = { result: ContainmentType.NONE, unContaineStarPattern: [] };
     private alreadyTraversed: Map<string, boolean>;
     public readonly starPattern: IStarPatternWithDependencies;
@@ -366,6 +400,12 @@ export class Bindings implements IBindings {
                 return ConstraintResult.RESPECT;
             }
             const nestedBinding = new Bindings(currentLinkedShape, dependencies, linkedShape, [], this.strict);
+            this.recordDependencyEvidence(dependencies.name, currentLinkedShape, nestedBinding);
+            for (const [starPatternName, evidence] of nestedBinding.dependencyEvidence) {
+                for (const entry of evidence) {
+                    this.addDependencyEvidence(starPatternName, entry);
+                }
+            }
             if (nestedBinding.isFullyBounded()) {
                 this.bindings.set(triple.predicate, triple);
                 this.nestedContainedStarPatternNameShapesContained = new Map(
@@ -380,9 +420,18 @@ export class Bindings implements IBindings {
                     dependentShape.push(currentLinkedShape.name);
                 }
                 return ConstraintResult.RESPECT;
-            } else {
-                return ConstraintResult.NOT_RESPECT;
             }
+            // The dependency was not established. Distinguish a referenced shape that *refutes* the
+            // nested pattern — it leaves unbound triples, or forbids a predicate — from one that is
+            // merely silent about it because it is open. Only the former is evidence of
+            // incompatibility; the latter leaves the predicate of this triple matched by the
+            // current shape, which the classification records as a partial match.
+            const refutes = nestedBinding.getUnboundedTriple().length > 0
+                || nestedBinding.hasNegativeContradiction();
+            if (!refutes) {
+                this.nonRefutedDependency.add(triple.predicate);
+            }
+            return ConstraintResult.NOT_RESPECT;
         }
 
         return ConstraintResult.INAPPLICABLE;
@@ -533,6 +582,41 @@ export class Bindings implements IBindings {
 
     public hasNegativeContradiction(): boolean {
         return this.negativeContradiction;
+    }
+
+    public hasNonRefutedDependency(): boolean {
+        return this.nonRefutedDependency.size > 0;
+    }
+
+    public getDependencyEvidence(): IDependencyEvidence[] {
+        const resp: IDependencyEvidence[] = [];
+        for (const evidence of this.dependencyEvidence.values()) {
+            resp.push(...evidence);
+        }
+        return resp;
+    }
+
+    private recordDependencyEvidence(starPatternName: string, shape: IShape, nested: Bindings): void {
+        this.addDependencyEvidence(starPatternName, {
+            starPatternName,
+            shapeName: shape.name,
+            closed: shape.closed,
+            hasMatch: nested.getBoundTriple().length > 0 || nested.hasNonRefutedDependency(),
+            contained: nested.isFullyBounded()
+                && nested.containmentType().result === ContainmentType.FULL,
+            bindings: nested,
+        });
+    }
+
+    private addDependencyEvidence(starPatternName: string, entry: IDependencyEvidence): void {
+        const existing = this.dependencyEvidence.get(starPatternName);
+        if (existing === undefined) {
+            this.dependencyEvidence.set(starPatternName, [entry]);
+            return;
+        }
+        if (!existing.some(candidate => candidate.shapeName === entry.shapeName)) {
+            existing.push(entry);
+        }
     }
 
     public getNestedContainedStarPatternName(): IDependentStarPattern[] {

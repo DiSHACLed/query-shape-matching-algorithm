@@ -11,6 +11,7 @@ It is implemented as a Node.js library to calculate the containment (subsumption
 - **Star Pattern Decomposition**: Breaks down complex SPARQL queries into star patterns (groups of triple patterns sharing the same subject).
 - **Alignment Detection**: Identifies how closely a query matches the constraints defined in a shape.
 - **Dependency Tracking**: Handles links between shapes, detecting when a star pattern depends on another to be fully bounded.
+- **Explicit Negation**: A predicate declared under SHACL `sh:not` (or a ShEx negative triple constraint) never matches. Because such a shape states that the property must be absent, a query needing it is `REJECTED` even when the shape is open.
 
 ## How it Works
 
@@ -158,11 +159,35 @@ The library returns a report where each star pattern is assigned one of the foll
 
 | Result             | Description |
 | :----------------- | :---------- |
-| **`CONTAINED`**    | All query star patterns, including nested ones, are matched by the shape. |
+| **`CONTAINED`**    | Every *required* triple pattern of every star pattern, including nested ones, is matched by the shape. Unmatched `OPTIONAL` patterns do not prevent this. |
 | **`ALIGNED`**      | At least one triple pattern from the root star pattern matches on an open shape. |
-| **`UNALINGED`**    | Partial root star pattern match on a closed shape; or match on a nested star pattern while having no match on root star pattern. |
-| **`WEAKLY_REJECTED`** | None of the triple patterns match on an open shape. |
-| **`REJECTED`**     | None of the triple patterns match on a closed shape. |
+| **`UNALINGED`**    | Partial root star pattern match on a closed shape; or match on a nested star pattern while having no match on root star pattern. A predicate the shape declares but whose `sh:node` dependency could not be established counts as such a partial match. |
+| **`WEAKLY_REJECTED`** | No triple pattern matches, and at least one candidate shape is open and does not forbid the predicates involved. |
+| **`REJECTED`**     | No triple pattern matches, and every shape that describes the pattern either is closed or explicitly forbids a required predicate through `sh:not`. Also returned when there is no candidate shape. |
+
+### Nested dependencies
+
+A predicate constrained by `sh:node` is only fully bound when the nested star pattern is
+bound by the referenced shape. When it is not, the outcome depends on *why*:
+
+- the referenced shape is **closed** and does not declare what the nested pattern asks
+  for, so it forbids it. The dependency is refuted, the predicate does not match, and the
+  root pattern can be `REJECTED`. This is what lets a closed shape graph prune.
+- the referenced shape is **open** and merely silent about it. Nothing is refuted: data
+  conforming to that shape may well carry the predicate. The root predicate still matched
+  the referring shape, so the root pattern is a partial match — `UNALINGED` on a closed
+  referring shape, `ALIGNED` on an open one — and never `REJECTED`.
+
+A shape reached only through `sh:node` also governs the nested star pattern it resolves,
+so that pattern is classified against it even when the shape is passed as a
+`dependentShapes` entry rather than a candidate. Both placements give the same
+classification. This applies regardless of `decidingShapes`: role filtering chooses which
+shapes may decide a resource's relevance, not which shape governs a pattern one hop inside
+the shape graph.
+
+`OPTIONAL` triple patterns are never required for containment: a resource can answer
+the query without them. The rule is the same for open and closed shapes, so adding
+`sh:closed true` to a shape never raises its result.
 
 ### Examples of Containment Results
 
@@ -492,15 +517,49 @@ Another `REJECTED` case due to min/max value constraints:
 
 The FILTER range (`> 35`) conflicts with the shape range (`18..35`), so the result is `REJECTED`.
 
+## Solver options and report fields
+
+`solveShapeQueryContainment` accepts, besides `query` and `shapes`:
+
+| Option | Meaning |
+| :----- | :------ |
+| `dependentShapes` | Shapes that are not candidates themselves but are referenced by `sh:node` from a candidate. They are needed to resolve those references: an unresolvable `sh:node` cannot be refuted and is treated as satisfied, so omitting them over-estimates relevance. |
+| `decidingShapes` | Restricts which shape names may determine the result. Every shape in `shapes` still takes part in binding, so dependencies keep resolving, but only these classify a star pattern. Use it to apply an external eligibility rule, such as the input/output role filtering defined by the discovery specification. |
+
+The report carries:
+
+| Field | Meaning |
+| :---- | :------ |
+| `result` | The aggregate result for the complete query (see above). |
+| `starPatternsContainment` | Per star pattern: its result, the matching shape IRIs, and the predicate-level bindings. |
+| `visitShapeBoundedResource` | Per shape: whether at least one triple pattern bound to it. Independent of `result`, and usable to decide whether to retrieve the data behind a shape. |
+| `unsupported` | Constructs discarded during normalization, if any. |
+
 ## SPARQL Limitations
 
 The detection logic is focused on **Triple Patterns** and **Star Patterns**. Currently, the following SPARQL features are not (yet) supported:
 
 - **Filter Expressions**: FILTERs are only used to detect contradictions with shape constraints (for example numeric comparisons against non-numeric datatype constraints). Expressions that cannot be safely compared to shape constraints are conservatively ignored for containment decisions.
-- **Negative Patterns**: `MINUS` and `FILTER NOT EXISTS` are not used to determine containment.
+- **Negative Patterns**: `MINUS` and `FILTER NOT EXISTS` are discarded. Their triple patterns describe solutions to exclude, not data the resource must hold, so collecting them as ordinary patterns would move the result in both directions.
 - **Complex Property Paths**: While simple paths are supported, complex or recursive property paths are not considered yet.
 - **Aggregates & Subqueries**: `GROUP BY`, `HAVING`, and subqueries are not processed.
-- **Federated Queries**: `SERVICE` clauses are currently ignored.
+- **Federated Queries**: `SERVICE` clauses are discarded, since they read data from another endpoint.
+
+Discarding a construct removes constraints, so the result can over-estimate relevance
+but never ranks a relevant resource lower than it would otherwise be. Whatever was
+discarded is listed on `query.unsupported` and echoed on `report.unsupported`.
+
+### Queries with no usable triple pattern
+
+An unrestricted triple pattern (`?s ?p ?o`) yields no star pattern, because shapes
+constrain named predicates. It still asks for every triple of the resource, so such a
+query is `CONTAINED` by any shape, every shape is marked visitable, and
+`query.matchesAnyTriple` is set.
+
+A query with no triple pattern at all — an empty `WHERE`, a body of only `VALUES` or
+`FILTER`, or one left empty after discarding — never asks the resource for data, so no
+relevance degree applies. `solveShapeQueryContainment` throws `EmptyQueryError` rather
+than reporting `CONTAINED` for it.
 
 ## License
 

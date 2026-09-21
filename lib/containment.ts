@@ -11,7 +11,7 @@ import type { Term } from '@rdfjs/types';
  * @param param {IContainementArg} - the shape and the query to evaluate
  * @returns {IResult} result relative to the containement of the query inside of the shape
  */
-export function solveShapeQueryContainment({ query, shapes, decidingShapes }: IContainementArg): IResult {
+export function solveShapeQueryContainment({ query, shapes, dependentShapes, decidingShapes }: IContainementArg): IResult {
   if (query.starPatterns.size === 0) {
     // A query whose only triple patterns are unrestricted (?s ?p ?o) asks for every triple of the
     // resource, so every resource is relevant and every shape is worth visiting. That is a real
@@ -30,7 +30,7 @@ export function solveShapeQueryContainment({ query, shapes, decidingShapes }: IC
   const starPatternsContainment = new Map<StarPatternName, IContainmentResult>();
   const classificationStats = new Map<StarPatternName, IContainmentStats>();
 
-  const groupedShapes = groupShapeBydependencies(shapes);
+  const groupedShapes = groupShapeBydependencies(shapes, dependentShapes);
 
   // Initialize per-star-pattern classification state.
   for (const [starPatternsName] of query.starPatterns) {
@@ -55,6 +55,39 @@ export function solveShapeQueryContainment({ query, shapes, decidingShapes }: IC
       const filterCompatibility = evaluateFiltersForShape(query.filters, starPattern, shape);
       bindingResultofShape.set(starPatternName, { result: bindings, shape });
       updateContainmentStats(classificationStats, starPatternName, shape, bindings, groupedShapes, decidingShapes, filterCompatibility !== FilterTruth.FALSE);
+    }
+  }
+
+  // A shape reached only as an sh:node target is not a candidate, but it is the shape that governs
+  // the nested star pattern it resolves. Classify that pattern against it, so a nested pattern is
+  // neither rejected on the strength of shapes that never described it, nor left rejected while
+  // the shape that does describe it binds the pattern completely. This is deliberately independent
+  // of `decidingShapes`: role filtering selects which shapes may decide a resource's relevance, not
+  // which shape governs a pattern one hop inside the shape graph.
+  for (const starPatternBindings of bindingResult.values()) {
+    for (const { result } of starPatternBindings.values()) {
+      for (const evidence of result.getDependencyEvidence()) {
+        const stats = classificationStats.get(evidence.starPatternName);
+        if (stats === undefined) {
+          continue;
+        }
+        if (evidence.closed) {
+          stats.hasClosedShape = true;
+        } else {
+          stats.hasOpenShape = true;
+        }
+        if (evidence.contained) {
+          stats.containedTargets.add(evidence.shapeName);
+        }
+        if (evidence.hasMatch || evidence.contained) {
+          stats.bindings.set(evidence.shapeName, evidence.bindings);
+          if (evidence.closed) {
+            stats.rootTargetsClosed.add(evidence.shapeName);
+          } else {
+            stats.rootTargetsOpen.add(evidence.shapeName);
+          }
+        }
+      }
     }
   }
 
@@ -168,8 +201,10 @@ function updateContainmentStats(
     return;
   }
 
-  // Track root-level alignment independently from full containment.
-  const hasRootMatch = bindings.getBoundTriple().length > 0;
+  // Track root-level alignment independently from full containment. A predicate whose sh:node
+  // dependency was neither established nor refuted still matched this shape, so it counts here:
+  // otherwise a root pattern the shape does declare would be reported as no match at all.
+  const hasRootMatch = bindings.getBoundTriple().length > 0 || bindings.hasNonRefutedDependency();
   if (hasRootMatch) {
     stats.bindings.set(shape.name, bindings);
     if (shape.closed) {
