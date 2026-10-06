@@ -182,8 +182,9 @@ A shape reached only through `sh:node` also governs the nested star pattern it r
 so that pattern is classified against it even when the shape is passed as a
 `dependentShapes` entry rather than a candidate. Both placements give the same
 classification. This applies regardless of `decidingShapes`: role filtering chooses which
-shapes may decide a resource's relevance, not which shape governs a pattern one hop inside
-the shape graph.
+shapes may decide a resource's relevance, not which shape governs a pattern inside the
+shape graph. Only references reached from a candidate count, though: a shape excluded by
+`decidingShapes` lends no evidence through `sh:node` references of its own.
 
 `OPTIONAL` triple patterns are never required for containment: a resource can answer
 the query without them. The rule is the same for open and closed shapes, so adding
@@ -524,7 +525,7 @@ The FILTER range (`> 35`) conflicts with the shape range (`18..35`), so the resu
 | Option | Meaning |
 | :----- | :------ |
 | `dependentShapes` | Shapes that are not candidates themselves but are referenced by `sh:node` from a candidate. They are needed to resolve those references: an unresolvable `sh:node` cannot be refuted and is treated as satisfied, so omitting them over-estimates relevance. |
-| `decidingShapes` | Restricts which shape names may determine the result. Every shape in `shapes` still takes part in binding, so dependencies keep resolving, but only these classify a star pattern. Use it to apply an external eligibility rule, such as the input/output role filtering defined by the discovery specification. |
+| `decidingShapes` | Restricts which shapes in `shapes` are candidates. The others are treated as `dependentShapes`: they still resolve `sh:node` references from the candidates, but never classify a star pattern themselves, lend evidence through `sh:node` references of their own, or receive a visit indication. Use it to apply an external eligibility rule, such as the input/output role filtering defined by the discovery specification. |
 
 The report carries:
 

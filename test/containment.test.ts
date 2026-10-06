@@ -6,7 +6,7 @@ import { IStarPatternWithDependencies, Triple } from '../lib/Triple';
 import { ContainmentResult, EmptyQueryError, IContainmentResult, IResult as ContainmentReport, StarPatternName, solveShapeQueryContainment, solveShapeShapeContainment } from '../lib/containment';
 import { DataFactory } from 'rdf-data-factory';
 import { BaseQuad } from '@rdfjs/types';
-import { IQuery, generateQuery } from '../lib/query';
+import { IQuery, generateQuery, shapeToQuery } from '../lib/query';
 import { RDF as RDF_VOCAB } from '../lib/constant';
 import type * as RDF from '@rdfjs/types';
 import * as N3 from 'n3';
@@ -19,6 +19,14 @@ const DF = new DataFactory<BaseQuad>();
 const n3Parser = new N3.Parser();
 const sparqlParser = new SPARQLParser();
 type IResult = Omit<ContainmentReport, 'result'>;
+
+async function parseShaclShape(quads: RDF.Quad[], name: string): Promise<IShape> {
+    const parsed = await shaclShapeFromQuads(quads, name);
+    if (parsed instanceof Error) {
+        throw parsed;
+    }
+    return parsed;
+}
 
 describe('solveShapeQueryContainment', () => {
 
@@ -1886,7 +1894,7 @@ describe('supported profile and explicit negation', () => {
 
     async function classify(rawQuery: string, rawShape: string): Promise<ContainmentResult> {
         const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
-        const candidate = await shaclShapeFromQuads(new N3.Parser().parse(rawShape), 'http://example.org/S');
+        const candidate = await parseShaclShape(new N3.Parser().parse(rawShape), 'http://example.org/S');
         return solveShapeQueryContainment({ query, shapes: [candidate] }).result;
     }
 
@@ -1956,7 +1964,7 @@ describe('supported profile and explicit negation', () => {
         // the resource, so any resource is relevant and the honest result is CONTAINED.
         async function report(rawQuery: string) {
             const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
-            const candidate = await shaclShapeFromQuads(new N3.Parser().parse(closedNameShape), 'http://example.org/S');
+            const candidate = await parseShaclShape(new N3.Parser().parse(closedNameShape), 'http://example.org/S');
             return { query, result: solveShapeQueryContainment({ query, shapes: [candidate] }) };
         }
 
@@ -2028,8 +2036,8 @@ describe('dependency-only shapes', () => {
     async function rootResultFor(rawQuery: string, useDependentShapes: boolean, ttl: string = shapesTtl): Promise<ContainmentResult> {
         const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${PREFIXES} ${rawQuery}`)));
         const quads = new N3.Parser().parse(ttl);
-        const candidate = await shaclShapeFromQuads(quads, 'http://example.org/A');
-        const linked = await shaclShapeFromQuads(quads, 'http://example.org/B');
+        const candidate = await parseShaclShape(quads, 'http://example.org/A');
+        const linked = await parseShaclShape(quads, 'http://example.org/B');
         const report = solveShapeQueryContainment({
             query,
             shapes: [candidate],
@@ -2087,8 +2095,8 @@ describe('nested dependencies and partial matches', () => {
     async function classify(rawQuery: string, friendClosed: boolean, asDependency: boolean) {
         const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${PREFIXES} ${rawQuery}`)));
         const quads = new N3.Parser().parse(shapesTtl(friendClosed));
-        const person = await shaclShapeFromQuads(quads, 'http://example.org/PersonShape');
-        const friend = await shaclShapeFromQuads(quads, 'http://example.org/FriendShape');
+        const person = await parseShaclShape(quads, 'http://example.org/PersonShape');
+        const friend = await parseShaclShape(quads, 'http://example.org/FriendShape');
         const report = asDependency
             ? solveShapeQueryContainment({ query, shapes: [person], dependentShapes: [friend] })
             : solveShapeQueryContainment({ query, shapes: [person, friend] });
@@ -2147,5 +2155,133 @@ describe('nested dependencies and partial matches', () => {
                 }
             }
         });
+    });
+});
+
+describe('role filtering with decidingShapes', () => {
+    // The service relates ex:Response with role disc:OutputShape, and ex:Request and ex:Address with
+    // role disc:InputShape. The user's shapes have role disc:InputShape, so only ex:Response may
+    // decide; the client applies that through decidingShapes. ex:Request and ex:Address are excluded,
+    // but remain part of the shape graph that ex:Response refers to.
+    const serviceTtl = `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+
+        ex:Response a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path ex:request ; sh:node ex:Request ] .
+
+        ex:Request a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path ex:query ] ;
+            sh:property [ sh:path ex:address ; sh:node ex:Address ] .
+
+        ex:Address a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path ex:street ] .`;
+
+    const userTtl = `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        @prefix user: <http://example.org/user/> .
+
+        # Reachable from ex:Response, directly and through ex:Request.
+        user:EchoedQuery a sh:NodeShape ;
+            sh:property [ sh:path ex:request ; sh:node user:QueryRequest ] .
+        user:QueryRequest a sh:NodeShape ;
+            sh:property [ sh:path ex:query ] .
+
+        user:EchoedAddress a sh:NodeShape ;
+            sh:property [ sh:path ex:request ; sh:node user:AddressRequest ] .
+        user:AddressRequest a sh:NodeShape ;
+            sh:property [ sh:path ex:address ; sh:node user:StreetAddress ] .
+
+        # Described only by the excluded input shapes.
+        user:Addressed a sh:NodeShape ;
+            sh:property [ sh:path ex:address ; sh:node user:StreetAddress ] .
+        user:StreetAddress a sh:NodeShape ;
+            sh:property [ sh:path ex:street ] .`;
+
+    const RESPONSE = 'http://example.org/Response';
+    const SERVICE_SHAPES = [RESPONSE, 'http://example.org/Request', 'http://example.org/Address'];
+    const USER = 'http://example.org/user/';
+    const USER_SHAPES = ['EchoedQuery', 'QueryRequest', 'EchoedAddress', 'AddressRequest', 'Addressed', 'StreetAddress']
+        .map(name => `${USER}${name}`);
+    const ECHOED_QUERY = `${USER}EchoedQuery`;
+    const ECHOED_ADDRESS = `${USER}EchoedAddress`;
+    const ADDRESSED = `${USER}Addressed`;
+
+    async function parseShapes(ttl: string, names: string[]): Promise<IShape[]> {
+        const quads = new N3.Parser().parse(ttl);
+        const shapes: IShape[] = [];
+        for (const name of names) {
+            shapes.push(await parseShaclShape(quads, name));
+        }
+        return shapes;
+    }
+
+    async function solve(userShape: string, placement: 'deciding' | 'unfiltered' | 'dependent' | 'dropped'): Promise<ContainmentReport> {
+        const [response, request, address] = await parseShapes(serviceTtl, SERVICE_SHAPES);
+        const userShapes = await parseShapes(userTtl, USER_SHAPES);
+        const sourceShape = userShapes.find(shape => shape.name === userShape)!;
+        switch (placement) {
+            case 'deciding':
+                return solveShapeShapeContainment({ sourceShape, sourceLinkedShapes: userShapes, targetShapes: [response, request, address], decidingShapes: new Set([RESPONSE]) });
+            case 'unfiltered':
+                return solveShapeShapeContainment({ sourceShape, sourceLinkedShapes: userShapes, targetShapes: [response, request, address] });
+            case 'dependent':
+                // solveShapeShapeContainment takes no dependentShapes, so translate the shape as it does.
+                return solveShapeQueryContainment({ query: shapeToQuery(sourceShape, { linkedShapes: userShapes }), shapes: [response], dependentShapes: [request, address] });
+            case 'dropped':
+                return solveShapeShapeContainment({ sourceShape, sourceLinkedShapes: userShapes, targetShapes: [response] });
+        }
+    }
+
+    function summarize(report: ContainmentReport): { aggregate: ContainmentResult; starPatterns: Map<StarPatternName, ContainmentResult>; visit: Map<string, boolean> } {
+        return {
+            aggregate: report.result,
+            starPatterns: new Map(Array.from(report.starPatternsContainment, ([name, { result }]) => [name, result])),
+            visit: report.visitShapeBoundedResource,
+        };
+    }
+
+    it('should resolve references to excluded shapes, directly and transitively', async () => {
+        for (const userShape of [ECHOED_QUERY, ECHOED_ADDRESS]) {
+            expect((await solve(userShape, 'deciding')).result).toBe(ContainmentResult.CONTAINED);
+        }
+    });
+
+    it('should lose that match when the excluded shapes are dropped instead', async () => {
+        // The unresolvable reference leaves the nested pattern to ex:Response alone, which is closed
+        // and never describes it.
+        expect((await solve(ECHOED_QUERY, 'dropped')).result).toBe(ContainmentResult.REJECTED);
+    });
+
+    it('should not let an excluded shape lend evidence through its own references', async () => {
+        // ex:Request binds the root pattern and resolves the nested one against ex:Address, but neither
+        // may decide. Counting that evidence would lift the resource to UNALINGED on the strength of
+        // its input shapes alone.
+        const report = await solve(ADDRESSED, 'deciding');
+        expect(report.result).toBe(ContainmentResult.REJECTED);
+        expect(report.starPatternsContainment.get(`${USER}StreetAddress`)!.result).toBe(ContainmentResult.REJECTED);
+    });
+
+    it('should only give visit indications to the deciding shapes', async () => {
+        const report = await solve(ADDRESSED, 'deciding');
+        expect(report.visitShapeBoundedResource).toStrictEqual(new Map([[RESPONSE, false]]));
+    });
+
+    it('should classify exactly as passing the excluded shapes as dependentShapes', async () => {
+        for (const userShape of [ECHOED_QUERY, ECHOED_ADDRESS, ADDRESSED]) {
+            expect(summarize(await solve(userShape, 'deciding')))
+                .toStrictEqual(summarize(await solve(userShape, 'dependent')));
+        }
+    });
+
+    it('should contain the same request when no role applies', async () => {
+        // A role only qualifies an input shape. Without one, or for a SPARQL query, every service shape
+        // is a candidate: ex:Request covers the root pattern and ex:Address the nested one.
+        expect((await solve(ADDRESSED, 'unfiltered')).result).toBe(ContainmentResult.CONTAINED);
+        const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+            'PREFIX ex: <http://example.org/> SELECT * WHERE { ?q ex:address ?a . ?a ex:street ?s }')));
+        const shapes = await parseShapes(serviceTtl, SERVICE_SHAPES);
+        expect(solveShapeQueryContainment({ query, shapes }).result).toBe(ContainmentResult.CONTAINED);
     });
 });

@@ -12,6 +12,17 @@ import type { Term } from '@rdfjs/types';
  * @returns {IResult} result relative to the containement of the query inside of the shape
  */
 export function solveShapeQueryContainment({ query, shapes, dependentShapes, decidingShapes }: IContainementArg): IResult {
+  if (decidingShapes !== undefined) {
+    // Role filtering selects the candidates; it does not hide shapes from sh:node resolution. A shape
+    // outside `decidingShapes` is therefore only a dependency: it still resolves the references of the
+    // candidates, but neither decides a star pattern, nor lends evidence through references of its own,
+    // nor receives a visit indication.
+    return solveShapeQueryContainment({
+      query,
+      shapes: shapes.filter(shape => decidingShapes.has(shape.name)),
+      dependentShapes: (dependentShapes ?? []).concat(shapes.filter(shape => !decidingShapes.has(shape.name))),
+    });
+  }
   if (query.starPatterns.size === 0) {
     // A query whose only triple patterns are unrestricted (?s ?p ?o) asks for every triple of the
     // resource, so every resource is relevant and every shape is worth visiting. That is a real
@@ -54,16 +65,17 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
       const bindings = new Bindings(shape, starPattern, dependencies, starPatternUnion);
       const filterCompatibility = evaluateFiltersForShape(query.filters, starPattern, shape);
       bindingResultofShape.set(starPatternName, { result: bindings, shape });
-      updateContainmentStats(classificationStats, starPatternName, shape, bindings, groupedShapes, decidingShapes, filterCompatibility !== FilterTruth.FALSE);
+      updateContainmentStats(classificationStats, starPatternName, shape, bindings, groupedShapes, filterCompatibility !== FilterTruth.FALSE);
     }
   }
 
   // A shape reached only as an sh:node target is not a candidate, but it is the shape that governs
   // the nested star pattern it resolves. Classify that pattern against it, so a nested pattern is
   // neither rejected on the strength of shapes that never described it, nor left rejected while
-  // the shape that does describe it binds the pattern completely. This is deliberately independent
-  // of `decidingShapes`: role filtering selects which shapes may decide a resource's relevance, not
-  // which shape governs a pattern one hop inside the shape graph.
+  // the shape that does describe it binds the pattern completely. Only candidates have bindings here,
+  // so the evidence covers exactly the references reached from a candidate: a shape excluded by
+  // `decidingShapes` still governs the patterns a candidate resolves through it, but its own
+  // references lend no evidence.
   for (const starPatternBindings of bindingResult.values()) {
     for (const { result } of starPatternBindings.values()) {
       for (const evidence of result.getDependencyEvidence()) {
@@ -179,14 +191,8 @@ function updateContainmentStats(
   shape: IShape,
   bindings: IBindings,
   groupedShapes: IShapeWithDependencies[],
-  decidingShapes?: Set<string>,
   filterCompatible = true,
 ): void {
-  // Skip shapes that are not part of the current decision scope.
-  if (decidingShapes !== undefined && !decidingShapes.has(shape.name)) {
-    return;
-  }
-
   const stats = classificationStats.get(starPatternName)!;
   // A shape that explicitly forbids a required predicate (sh:not) proves incompatibility, so it
   // must not count as the "open shape" that would soften REJECTED into WEAKLY_REJECTED.
@@ -221,10 +227,10 @@ function updateContainmentStats(
   }
 
   // Preserve previous behavior where a disjunction can be considered fully covered
-  // when unresolved alternatives are contained by another deciding shape.
+  // when unresolved alternatives are contained by another candidate shape.
   if (bindings.isFullyBounded() && bindings.containmentType().result === ContainmentType.PARTIAL) {
     const unContaineStarPattern = bindings.containmentType().unContaineStarPattern!;
-    const hasDisjuncContainment = findDisjunctContainment(unContaineStarPattern, groupedShapes, shape, decidingShapes);
+    const hasDisjuncContainment = findDisjunctContainment(unContaineStarPattern, groupedShapes, shape);
     if (hasDisjuncContainment) {
       stats.bindings.set(shape.name, bindings);
       stats.containedTargets.add(shape.name);
@@ -232,12 +238,12 @@ function updateContainmentStats(
   }
 }
 
-function findDisjunctContainment(starPatterns: IStarPatternWithDependencies[], groupedShapes: IShapeWithDependencies[], shapeExcluded: IShape, decidingShapes?: Set<string>): boolean {
+function findDisjunctContainment(starPatterns: IStarPatternWithDependencies[], groupedShapes: IShapeWithDependencies[], shapeExcluded: IShape): boolean {
   // Search whether unresolved disjunctive branches can be absorbed by another shape.
   let haveContainment = false;
   for (const starPattern of starPatterns) {
     for (const { shape, dependencies } of groupedShapes) {
-      if (shape.name !== shapeExcluded.name && (decidingShapes === undefined || decidingShapes.has(shape.name))) {
+      if (shape.name !== shapeExcluded.name) {
         const bindings = new Bindings(shape, starPattern, dependencies);
         haveContainment = haveContainment || bindings.isFullyBounded();
       }
@@ -1022,7 +1028,7 @@ export interface IContainementArg {
   query: IQuery;
   shapes: IShape[];
   dependentShapes?: IShape[];
-  // shapes to consider when making a decision
+  // names of the shapes in `shapes` that are candidates; the others only resolve sh:node references
   decidingShapes?: Set<string>;
 }
 
