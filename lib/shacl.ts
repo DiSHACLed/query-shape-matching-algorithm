@@ -336,17 +336,22 @@ function collectNotProps(map: IMapTripleShacl, shapeIri: string): Set<string> {
     return result;
 }
 
+// SHACL bounds a cardinality only when it is declared: an absent sh:minCount is 0 and an absent
+// sh:maxCount is unbounded (-1 in ICardinality).
+const SHACL_DEFAULT_MIN_COUNT = 0;
+const SHACL_DEFAULT_MAX_COUNT = -1;
+
 /** Whether a property shape data entry represents a negative predicate (minCount=0, maxCount=0). */
 function isNegatedData(data: IPropertyShapeData): boolean {
-    return isNegativeCardinality(data.minCount, data.maxCount);
+    return isNegativeCardinality(data.minCount ?? SHACL_DEFAULT_MIN_COUNT, data.maxCount);
 }
 
 /** Build an IPredicate from a property shape data entry. */
 function buildPredicate(data: IPropertyShapeData): IPredicate {
     return buildSharedPredicate({
         name: data.path!,
-        minCount: data.minCount,
-        maxCount: data.maxCount,
+        minCount: data.minCount ?? SHACL_DEFAULT_MIN_COUNT,
+        maxCount: data.maxCount ?? SHACL_DEFAULT_MAX_COUNT,
         constraintParts: {
             classConstraint: data.classConstraint,
             shapeConstraint: data.nodeConstraint,

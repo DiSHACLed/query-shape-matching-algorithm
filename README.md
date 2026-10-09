@@ -11,7 +11,7 @@ It is implemented as a Node.js library to calculate the containment (subsumption
 - **Star Pattern Decomposition**: Breaks down complex SPARQL queries into star patterns (groups of triple patterns sharing the same subject).
 - **Alignment Detection**: Identifies how closely a query matches the constraints defined in a shape.
 - **Dependency Tracking**: Handles links between shapes, detecting when a star pattern depends on another to be fully bounded.
-- **Explicit Negation**: A predicate declared under SHACL `sh:not` (or a ShEx negative triple constraint) never matches. Because such a shape states that the property must be absent, a query needing it is `REJECTED` even when the shape is open.
+- **Explicit Negation**: A predicate declared under SHACL `sh:not` or limited by `sh:maxCount 0` (or a ShEx negative triple constraint) never matches. Because such a shape states that the property must be absent, a query needing it is `REJECTED` even when the shape is open.
 
 ## How it Works
 
@@ -163,7 +163,7 @@ The library returns a report where each star pattern is assigned one of the foll
 | **`ALIGNED`**      | At least one triple pattern from the root star pattern matches on an open shape. |
 | **`UNALINGED`**    | Partial root star pattern match on a closed shape; or match on a nested star pattern while having no match on root star pattern. A predicate the shape declares but whose `sh:node` dependency could not be established counts as such a partial match. |
 | **`WEAKLY_REJECTED`** | No triple pattern matches, and at least one candidate shape is open and does not forbid the predicates involved. |
-| **`REJECTED`**     | No triple pattern matches, and every shape that describes the pattern either is closed or explicitly forbids a required predicate through `sh:not`. Also returned when there is no candidate shape. |
+| **`REJECTED`**     | No triple pattern matches, and every shape that describes the pattern either is closed or explicitly forbids a required predicate through `sh:not` or `sh:maxCount 0`. Also returned when there is no candidate shape. |
 
 ### Nested dependencies
 
@@ -189,6 +189,11 @@ shape graph. Only references reached from a candidate count, though: a shape exc
 `OPTIONAL` triple patterns are never required for containment: a resource can answer
 the query without them. The rule is the same for open and closed shapes, so adding
 `sh:closed true` to a shape never raises its result.
+
+A source shape follows the cardinality semantics of its language. In SHACL, an absent
+`sh:minCount` is 0 and an absent `sh:maxCount` is unbounded, so a property constraint
+without `sh:minCount` becomes an optional triple pattern. In ShEx, a triple constraint
+without a cardinality occurs exactly once, so it becomes a required one.
 
 ### Examples of Containment Results
 

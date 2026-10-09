@@ -31,6 +31,7 @@ describe.each([
   const closedShapeMultipleProperties = populateFunction('./test/shape/shacl_shape_closed_multiple_properties.ttl');
   const twoShapes = populateFunction('./test/shape/shacl_two_shapes.ttl');
   const shapeMultipleCardinality = populateFunction('./test/shape/shacl_shape_multiple_cardinality.ttl');
+  const shapeDefaultCardinality = populateFunction('./test/shape/shacl_shape_default_cardinality.ttl');
   const shapeWithConstraints = populateFunction('./test/shape/shacl_shape_with_constraints.ttl');
   const shapeWithOrStatement = populateFunction('./test/shape/shacl_shape_or_statement.ttl');
   const shapeWithXoneStatement = populateFunction('./test/shape/shacl_shape_xone_statement.ttl');
@@ -169,6 +170,30 @@ describe.each([
     ]);
     for (const [pred, expectedCard] of mapCardinality) {
       expect((shape as IShape).get(pred)?.cardinality).toStrictEqual(expectedCard);
+    }
+  });
+
+  it(`${name}: should apply the SHACL defaults for an absent sh:minCount or sh:maxCount`, async () => {
+    const shape = await shaclShapeFromQuads(shapeDefaultCardinality, shapeIri);
+    expect(shape).not.toBeInstanceOf(Error);
+
+    expect(new Set((shape as IShape).positivePredicates)).toStrictEqual(new Set([
+      `${FOAF_PREFIX}prop1`,
+      `${FOAF_PREFIX}prop2`,
+      `${FOAF_PREFIX}prop3`,
+    ]));
+    // sh:maxCount 0 forbids the property, since the absent sh:minCount is 0
+    expect((shape as IShape).negativePredicates).toStrictEqual([`${FOAF_PREFIX}prop4`]);
+
+    // An absent sh:minCount is 0, so the property is optional; an absent sh:maxCount is unbounded (-1)
+    const expected = new Map([
+      [`${FOAF_PREFIX}prop1`, { cardinality: { min: 0, max: -1 }, optional: true }],
+      [`${FOAF_PREFIX}prop2`, { cardinality: { min: 1, max: -1 }, optional: false }],
+      [`${FOAF_PREFIX}prop3`, { cardinality: { min: 0, max: 2 }, optional: true }],
+    ]);
+    for (const [pred, { cardinality, optional }] of expected) {
+      expect((shape as IShape).get(pred)?.cardinality).toStrictEqual(cardinality);
+      expect((shape as IShape).get(pred)?.optional).toBe(optional);
     }
   });
 

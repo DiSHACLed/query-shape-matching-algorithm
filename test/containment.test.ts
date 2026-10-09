@@ -2285,3 +2285,34 @@ describe('role filtering with decidingShapes', () => {
         expect(solveShapeQueryContainment({ query, shapes }).result).toBe(ContainmentResult.CONTAINED);
     });
 });
+
+describe('SHACL cardinality defaults in a source shape', () => {
+    // As in SHACL, a property constraint without sh:minCount sets no lower bound: its triple pattern is
+    // optional and never prevents containment. ex:Target is open and only declares ex:age.
+    const shapesTtl = (nameCardinality: string): string => `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+
+        ex:Source a sh:NodeShape ;
+            sh:property [ sh:path ex:name ${nameCardinality} ] ;
+            sh:property [ sh:path ex:age ; sh:minCount 1 ] .
+
+        ex:Target a sh:NodeShape ;
+            sh:property [ sh:path ex:age ] .`;
+
+    async function solve(nameCardinality: string): Promise<ContainmentResult> {
+        const quads = new N3.Parser().parse(shapesTtl(nameCardinality));
+        const source = await parseShaclShape(quads, 'http://example.org/Source');
+        const target = await parseShaclShape(quads, 'http://example.org/Target');
+        return solveShapeShapeContainment({ sourceShape: source, targetShapes: [target] }).result;
+    }
+
+    it('should treat a property constraint without sh:minCount as optional', async () => {
+        expect(await solve('')).toBe(ContainmentResult.CONTAINED);
+        expect(await solve('; sh:maxCount 1')).toBe(ContainmentResult.CONTAINED);
+    });
+
+    it('should keep a property constraint with a positive sh:minCount required', async () => {
+        expect(await solve('; sh:minCount 1')).toBe(ContainmentResult.ALIGNED);
+    });
+});
