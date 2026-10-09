@@ -7,6 +7,7 @@ import { streamifyArray } from 'streamify-array';
 import { RDF as RDF_VOCAB } from '../lib/constant';
 import { ConstraintType, type IConstraint, type OneOf, type IShape } from '../lib/Shape';
 import { shaclShapeFromQuads } from '../lib/shacl';
+import type { ParserDiagnostic } from '../lib/parser-policy';
 
 const DF = new DataFactory<RDF.Quad>();
 const n3Parser = new N3.Parser();
@@ -363,6 +364,24 @@ describe.each([
     ]));
   });
 
+  it(`${name}: should keep one disjunction for each sh:or and sh:xone value`, async () => {
+    const shape = await shaclShapeFromQuads(populateFunction(n3Parser.parse(`
+      @prefix sh: <http://www.w3.org/ns/shacl#> .
+      @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+      <${shapeIri}> a sh:NodeShape ;
+        sh:property [ sh:path foaf:name ] ;
+        sh:or ( [ sh:path foaf:mbox ] [ sh:path foaf:phone ] ) ;
+        sh:or ( [ sh:path foaf:homepage ] [ sh:path foaf:weblog ] ) ;
+        sh:xone ( [ sh:path foaf:age ] [ sh:path foaf:birthday ] ) .`)), shapeIri);
+    expect(shape).not.toBeInstanceOf(Error);
+    const disjunctions = (shape as IShape).oneOf.map(oneOf => oneOf.map(branch => branch.map(p => p.name)));
+    expect(new Set(disjunctions.map(oneOf => JSON.stringify(oneOf)))).toStrictEqual(new Set([
+      [[`${FOAF_PREFIX}mbox`], [`${FOAF_PREFIX}phone`]],
+      [[`${FOAF_PREFIX}homepage`], [`${FOAF_PREFIX}weblog`]],
+      [[`${FOAF_PREFIX}age`], [`${FOAF_PREFIX}birthday`]],
+    ].map(oneOf => JSON.stringify(oneOf))));
+  });
+
   // ── sh:not ───────────────────────────────────────────────────────────────
 
   it(`${name}: should handle sh:not as a negative predicate`, async () => {
@@ -370,6 +389,48 @@ describe.each([
     expect(shape).not.toBeInstanceOf(Error);
     expect((shape as IShape).positivePredicates).toStrictEqual([`${FOAF_PREFIX}prop1`]);
     expect((shape as IShape).negativePredicates).toStrictEqual([`${FOAF_PREFIX}prop2`]);
+  });
+
+  function shapeWithNegation(negation: string): any {
+    return populateFunction(n3Parser.parse(`
+      @prefix sh: <http://www.w3.org/ns/shacl#> .
+      @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+      @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+      <${shapeIri}> a sh:NodeShape ;
+        sh:property [ sh:path foaf:prop1 ] ;
+        sh:not ${negation} .`));
+  }
+
+  it(`${name}: should keep a negative predicate for each sh:not value`, async () => {
+    const shape = await shaclShapeFromQuads(
+      shapeWithNegation('[ sh:path foaf:prop2 ; sh:minCount 1 ], [ sh:path foaf:prop3 ; sh:minCount 1 ]'),
+      shapeIri,
+    );
+    expect(new Set((shape as IShape).negativePredicates)).toStrictEqual(new Set([`${FOAF_PREFIX}prop2`, `${FOAF_PREFIX}prop3`]));
+  });
+
+  it(`${name}: should keep sh:not as a negative predicate when it also carries non-validating properties`, async () => {
+    const shape = await shaclShapeFromQuads(
+      shapeWithNegation('[ a sh:PropertyShape ; sh:path foaf:prop2 ; sh:minCount 1 ; sh:name "no prop2" ; sh:message "forbidden" ]'),
+      shapeIri,
+    );
+    expect((shape as IShape).negativePredicates).toStrictEqual([`${FOAF_PREFIX}prop2`]);
+  });
+
+  it.each([
+    ['without sh:minCount', '[ sh:path foaf:prop2 ]'],
+    ['with sh:minCount 2', '[ sh:path foaf:prop2 ; sh:minCount 2 ]'],
+    ['with another constraint', '[ sh:path foaf:prop2 ; sh:minCount 1 ; sh:datatype xsd:string ]'],
+    ['with sh:maxCount', '[ sh:path foaf:prop2 ; sh:minCount 1 ; sh:maxCount 3 ]'],
+    ['over a complex path', '[ sh:path [ sh:inversePath foaf:prop2 ] ; sh:minCount 1 ]'],
+    ['over a node shape', '[ sh:property [ sh:path foaf:prop2 ; sh:minCount 1 ] ]'],
+  ])(`${name}: should ignore a sh:not that does not forbid its property (%s) and report it`, async (_, negation) => {
+    const diagnostics: ParserDiagnostic[] = [];
+    const shape = await shaclShapeFromQuads(shapeWithNegation(negation), shapeIri, { diagnostics });
+    expect(shape).not.toBeInstanceOf(Error);
+    expect((shape as IShape).positivePredicates).toStrictEqual([`${FOAF_PREFIX}prop1`]);
+    expect((shape as IShape).negativePredicates).toStrictEqual([]);
+    expect(diagnostics.map(d => d.code)).toStrictEqual(['UNSUPPORTED_NOT']);
   });
 
   // ── Error: inconsistent predicates ────────────────────────────────────────

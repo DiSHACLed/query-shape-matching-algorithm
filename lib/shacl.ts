@@ -23,6 +23,8 @@ const RDF_TRUE = DF.literal('true', DF.namedNode(XSD.boolean));
  */
 interface IPropertyShapeData {
     path?: string;
+    /** false when sh:path is a blank node, that is, a complex path */
+    pathIsIri?: boolean;
     minCount?: number;
     maxCount?: number;
     minInclusive?: number;
@@ -48,12 +50,12 @@ interface IMapTripleShacl {
     propertyData: Map<string, IPropertyShapeData>;
     /** shape IRI → closed flag */
     closedShape: Map<string, boolean>;
-    /** shape IRI / blank-node → list head blank-node (from sh:or / sh:xone) */
-    orLists: Map<string, string>;
-    /** shape IRI / blank-node → list head blank-node (from sh:xone) */
-    xoneLists: Map<string, string>;
-    /** shape IRI / blank-node → list head blank-node (from sh:not) */
-    notLinks: Map<string, string>;
+    /** shape IRI / blank-node → list head blank-nodes, one per sh:or value */
+    orLists: Map<string, Set<string>>;
+    /** shape IRI / blank-node → list head blank-nodes, one per sh:xone value */
+    xoneLists: Map<string, Set<string>>;
+    /** shape IRI / blank-node → negated shapes, one per sh:not value */
+    notLinks: Map<string, Set<string>>;
     /** RDF list first: node → value */
     listFirst: Map<string, string>;
     /** RDF list rest: node → next node */
@@ -66,6 +68,8 @@ interface IMapTripleShacl {
     types: Map<string, Set<string>>;
     /** class → rdfs:subClassOf values, to find the subclasses of rdfs:Class */
     superClasses: Map<string, Set<string>>;
+    /** node → the SHACL predicates it is the subject of, to check the form of a sh:not value */
+    shaclPredicates: Map<string, Set<string>>;
 }
 
 type IShapeTargetSets = { [K in keyof IShapeTargets]: Set<string> };
@@ -84,6 +88,7 @@ function defaultMap(): IMapTripleShacl {
         ignoredLists: new Map(),
         types: new Map(),
         superClasses: new Map(),
+        shaclPredicates: new Map(),
     };
 }
 
@@ -140,6 +145,10 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
     const s = quad.subject.value;
     const o = quad.object.value;
 
+    if (quad.predicate.value.startsWith(SHACL.namespace)) {
+        addToSetMap(map.shaclPredicates, s, quad.predicate.value);
+    }
+
     // sh:property  → register property shape under the node shape
     if (quad.predicate.equals(SHACL.terms.property)) {
         let props = map.shapeProperties.get(s);
@@ -157,7 +166,9 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
 
     // sh:path  → predicate IRI for this property shape
     if (quad.predicate.equals(SHACL.terms.path)) {
-        getOrCreatePropData(map, s).path = o;
+        const data = getOrCreatePropData(map, s);
+        data.path = o;
+        data.pathIsIri = quad.object.termType === 'NamedNode';
         return;
     }
 
@@ -235,19 +246,19 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
 
     // sh:or  → alternatives list head
     if (quad.predicate.equals(SHACL.terms.or)) {
-        map.orLists.set(s, o);
+        addToSetMap(map.orLists, s, o);
         return;
     }
 
     // sh:xone  → exclusive-one-of list head  (treated same as sh:or for query matching)
     if (quad.predicate.equals(SHACL.terms.xone)) {
-        map.xoneLists.set(s, o);
+        addToSetMap(map.xoneLists, s, o);
         return;
     }
 
     // sh:not  → negation (blank node property shape that should become a negative predicate)
     if (quad.predicate.equals(SHACL.terms.not)) {
-        map.notLinks.set(s, o);
+        addToSetMap(map.notLinks, s, o);
         // Create entry for the negated shape's blank node
         const negData = getOrCreatePropData(map, o);
         negData.isNegated = true;
@@ -342,7 +353,9 @@ function buildShape(
     // Collect sh:not negated property shapes from under the target shape
     const negatedPropIds = collectNotProps(map, shapeIri);
 
-    const hasOrList = map.orLists.has(shapeIri) || map.xoneLists.has(shapeIri);
+    // A shape conforms to every one of its sh:or and sh:xone values, so each becomes a disjunction
+    const orHeads = [...map.orLists.get(shapeIri) ?? [], ...map.xoneLists.get(shapeIri) ?? []];
+    const hasOrList = orHeads.length > 0;
     const targets = collectTargets(map, shapeIri);
     const hasTarget = Object.values(targets).some(values => values.length > 0);
 
@@ -371,16 +384,23 @@ function buildShape(
 
     // Negated property shapes from sh:not
     for (const negId of negatedPropIds) {
-        const data = map.propertyData.get(negId);
-        if (data?.path !== undefined) {
-            negativePredicates.push(data.path);
+        const forbidden = forbiddenPredicate(map, negId);
+        if (forbidden !== undefined) {
+            negativePredicates.push(forbidden);
+        } else {
+            addDiagnostic(options, {
+                level: 'warning',
+                code: 'UNSUPPORTED_NOT',
+                message: `sh:not of <${shapeIri}> does not forbid a single property and is ignored`,
+                shapeIri,
+                nodeId: negId,
+            });
         }
     }
 
     // Resolve sh:or / sh:xone into oneOf branches
     const oneOfs: OneOf[] = [];
-    const orHead = map.orLists.get(shapeIri) ?? map.xoneLists.get(shapeIri);
-    if (orHead !== undefined) {
+    for (const orHead of orHeads) {
         const branch = resolveOrList(orHead, map, shapeIri, options);
         if (branch.length > 0) {
             oneOfs.push(branch);
@@ -440,14 +460,30 @@ function subClassesOf(map: IMapTripleShacl, superClass: string): Set<string> {
     return result;
 }
 
-/** Collect all property-shape blank nodes reachable via sh:not from a shape IRI. */
+/** Collect the property shapes negated by the sh:not values of a shape. */
 function collectNotProps(map: IMapTripleShacl, shapeIri: string): Set<string> {
-    const result = new Set<string>();
-    const notTarget = map.notLinks.get(shapeIri);
-    if (notTarget !== undefined) {
-        result.add(notTarget);
+    return new Set(map.notLinks.get(shapeIri));
+}
+
+// The SHACL predicates that a sh:not value may carry besides sh:minCount and still forbid its path. The
+// others are not parameters: they do not take part in validation.
+const NEGATION_PREDICATES = new Set([
+    'path', 'minCount', 'name', 'description', 'order', 'group', 'defaultValue', 'message', 'severity', 'deactivated',
+].map(name => SHACL.custom(name)));
+
+/**
+ * The predicate that a sh:not value forbids, if any. `sh:not [ sh:path p ; sh:minCount 1 ]`, with an IRI
+ * path and no other parameter, is the only form that a node conforms to exactly when it has no value for p.
+ * Any other form holds for some nodes that carry p, so it forbids nothing: `sh:not [ sh:path p ; sh:minCount 2 ]`
+ * allows one value, and `sh:not [ sh:path p ; sh:datatype xsd:string ]` requires a value that is not a string.
+ */
+function forbiddenPredicate(map: IMapTripleShacl, nodeId: string): string | undefined {
+    const data = map.propertyData.get(nodeId);
+    if (data?.path === undefined || data.pathIsIri !== true || data.minCount !== 1) {
+        return undefined;
     }
-    return result;
+    const predicates = map.shaclPredicates.get(nodeId) ?? new Set<string>();
+    return Array.from(predicates).every(predicate => NEGATION_PREDICATES.has(predicate)) ? data.path : undefined;
 }
 
 // SHACL bounds a cardinality only when it is declared: an absent sh:minCount is 0 and an absent

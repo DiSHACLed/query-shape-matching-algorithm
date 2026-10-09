@@ -2172,11 +2172,33 @@ describe('supported profile and explicit negation', () => {
         });
     });
 
+    describe('several disjunctions', () => {
+        const shape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [ sh:path foaf:name ] ;
+                sh:or ( [ sh:path ex:email ] [ sh:path ex:fax ] ) ;
+                sh:xone ( [ sh:path ex:phone ] [ sh:path ex:mobile ] ) .`;
+
+        it.each([
+            ['the first', 'ex:email'],
+            ['the second', 'ex:phone'],
+        ])('should match a predicate of %s disjunction of a closed shape', async (_, predicate) => {
+            expect(await classify(`SELECT * WHERE { ?s foaf:name ?n ; ${predicate} ?x }`, shape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should match predicates of both disjunctions together', async () => {
+            expect(await classify('SELECT * WHERE { ?s ex:fax ?f ; ex:mobile ?m }', shape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+    });
+
     describe('sh:not', () => {
         const notShape = `${SHAPE_PREFIXES}
             <http://example.org/S> a sh:NodeShape ;
                 sh:property [ sh:path foaf:name ] ;
-                sh:not [ sh:path ex:secret ] .`;
+                sh:not [ sh:path ex:secret ; sh:minCount 1 ] .`;
 
         it('should reject a predicate the shape explicitly forbids, even on an open shape', async () => {
             expect(await classify('SELECT * WHERE { ?s ex:secret ?x }', notShape))
@@ -2186,6 +2208,29 @@ describe('supported profile and explicit negation', () => {
         it('should still match the positive predicates of the same shape', async () => {
             expect(await classify('SELECT * WHERE { ?s foaf:name ?n }', notShape))
                 .toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should reject a predicate forbidden by any of several sh:not values', async () => {
+            const shape = `${SHAPE_PREFIXES}
+                <http://example.org/S> a sh:NodeShape ;
+                    sh:property [ sh:path foaf:name ] ;
+                    sh:not [ sh:path ex:secret ; sh:minCount 1 ], [ sh:path ex:pin ; sh:minCount 1 ] .`;
+            expect(await classify('SELECT * WHERE { ?s ex:secret ?x }', shape)).toBe(ContainmentResult.REJECTED);
+            expect(await classify('SELECT * WHERE { ?s ex:pin ?x }', shape)).toBe(ContainmentResult.REJECTED);
+        });
+
+        // Each of these negations holds for some nodes that carry ex:secret, so the open shape does not exclude it.
+        it.each([
+            ['allows one value', '[ sh:path ex:secret ; sh:minCount 2 ]'],
+            ['requires a value that is not a string', '[ sh:path ex:secret ; sh:datatype xsd:string ]'],
+            ['only excludes the value ex:x', '[ sh:path ex:secret ; sh:minCount 1 ; sh:hasValue ex:x ]'],
+        ])('should not reject a predicate under a sh:not that %s', async (_, negation) => {
+            const shape = `${SHAPE_PREFIXES} @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+                <http://example.org/S> a sh:NodeShape ;
+                    sh:property [ sh:path foaf:name ] ;
+                    sh:not ${negation} .`;
+            expect(await classify('SELECT * WHERE { ?s ex:secret ?x }', shape))
+                .toBe(ContainmentResult.WEAKLY_REJECTED);
         });
     });
 });
