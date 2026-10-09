@@ -14,6 +14,12 @@ export interface IStarPatternWithDependencies {
    * `MINUS` over a single triple pattern, or negative predicates of an input shape.
    */
   excludedPredicates?: Set<string>;
+  /**
+   * The constants the subject is one of, when the star pattern is about given nodes only: the node
+   * targets (sh:targetNode) of an input shape. A star pattern whose subject is a constant in the
+   * query does not need it; its name is that constant.
+   */
+  subjectValues?: Set<string>;
 }
 
 export interface ITripleWithDependencies {

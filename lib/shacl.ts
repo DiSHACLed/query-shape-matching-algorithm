@@ -9,8 +9,8 @@ import {
     buildPredicate as buildSharedPredicate, 
     isNegativeCardinality 
 } from './Shape';
-import type { ShapeError } from './Shape';
-import { SHACL, RDF as RDF_VOCAB, XSD } from './constant';
+import type { ShapeError, IShapeTargets } from './Shape';
+import { SHACL, RDF as RDF_VOCAB, RDFS, XSD } from './constant';
 import { addDiagnostic, getPolicy, type IShapeParserOptions } from './parser-policy';
 
 const DF = new DataFactory();
@@ -58,7 +58,17 @@ interface IMapTripleShacl {
     listFirst: Map<string, string>;
     /** RDF list rest: node → next node */
     listRest: Map<string, string>;
+    /** shape IRI → declared targets (sh:targetNode, sh:targetClass, sh:targetSubjectsOf, sh:targetObjectsOf) */
+    targets: Map<string, IShapeTargetSets>;
+    /** shape IRI → list head (from sh:ignoredProperties) */
+    ignoredLists: Map<string, string>;
+    /** node → rdf:type values, to find implicit class targets */
+    types: Map<string, Set<string>>;
+    /** class → rdfs:subClassOf values, to find the subclasses of rdfs:Class */
+    superClasses: Map<string, Set<string>>;
 }
+
+type IShapeTargetSets = { [K in keyof IShapeTargets]: Set<string> };
 
 function defaultMap(): IMapTripleShacl {
     return {
@@ -70,6 +80,10 @@ function defaultMap(): IMapTripleShacl {
         notLinks: new Map(),
         listFirst: new Map(),
         listRest: new Map(),
+        targets: new Map(),
+        ignoredLists: new Map(),
+        types: new Map(),
+        superClasses: new Map(),
     };
 }
 
@@ -240,6 +254,42 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
         return;
     }
 
+    // Targets: the nodes the shape describes when it is used on its own
+    if (quad.predicate.equals(SHACL.terms.targetNode)) {
+        // A literal can be a node target too; keep it distinct from an IRI with the same text
+        const node = quad.object.termType === 'Literal' ? JSON.stringify(o) : o;
+        getOrCreateTargets(map, s).nodes.add(node);
+        return;
+    }
+    if (quad.predicate.equals(SHACL.terms.targetClass)) {
+        getOrCreateTargets(map, s).classes.add(o);
+        return;
+    }
+    if (quad.predicate.equals(SHACL.terms.targetSubjectsOf)) {
+        getOrCreateTargets(map, s).subjectsOf.add(o);
+        return;
+    }
+    if (quad.predicate.equals(SHACL.terms.targetObjectsOf)) {
+        getOrCreateTargets(map, s).objectsOf.add(o);
+        return;
+    }
+
+    // sh:ignoredProperties  → list of properties a closed shape allows without declaring them
+    if (quad.predicate.equals(SHACL.terms.ignoredProperties)) {
+        map.ignoredLists.set(s, o);
+        return;
+    }
+
+    // rdf:type and rdfs:subClassOf, to recognize a shape that is also a class (implicit class target)
+    if (quad.predicate.equals(RDF_VOCAB.terms.type)) {
+        addToSetMap(map.types, s, o);
+        return;
+    }
+    if (quad.predicate.equals(RDFS.terms.subClassOf)) {
+        addToSetMap(map.superClasses, s, o);
+        return;
+    }
+
     // rdf:first / rdf:rest for RDF lists (used by sh:or / sh:xone)
     if (quad.predicate.equals(RDF_VOCAB.terms.first)) {
         map.listFirst.set(s, o);
@@ -249,6 +299,24 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
         map.listRest.set(s, o);
         return;
     }
+}
+
+function getOrCreateTargets(map: IMapTripleShacl, shapeIri: string): IShapeTargetSets {
+    let targets = map.targets.get(shapeIri);
+    if (targets === undefined) {
+        targets = { nodes: new Set(), classes: new Set(), subjectsOf: new Set(), objectsOf: new Set() };
+        map.targets.set(shapeIri, targets);
+    }
+    return targets;
+}
+
+function addToSetMap(setMap: Map<string, Set<string>>, key: string, value: string): void {
+    let values = setMap.get(key);
+    if (values === undefined) {
+        values = new Set();
+        setMap.set(key, values);
+    }
+    values.add(value);
 }
 
 function getOrCreatePropData(
@@ -275,10 +343,14 @@ function buildShape(
     const negatedPropIds = collectNotProps(map, shapeIri);
 
     const hasOrList = map.orLists.has(shapeIri) || map.xoneLists.has(shapeIri);
+    const targets = collectTargets(map, shapeIri);
+    const hasTarget = Object.values(targets).some(values => values.length > 0);
 
-    if ((propIds === undefined || propIds.size === 0) && !hasOrList && negatedPropIds.size === 0) {
+    // A shape that only declares targets still describes nodes: they exist and are of the target
+    // kind, even though the shape constrains none of their properties.
+    if ((propIds === undefined || propIds.size === 0) && !hasOrList && negatedPropIds.size === 0 && !hasTarget) {
         return new PoorlyFormatedShapeError(
-            `No property shapes, sh:or, or sh:not found for shape <${shapeIri}>`,
+            `No property shapes, sh:or, sh:not, or target found for shape <${shapeIri}>`,
         );
     }
 
@@ -316,6 +388,10 @@ function buildShape(
     }
 
     const closed = map.closedShape.get(shapeIri) ?? false;
+    const ignoredHead = map.ignoredLists.get(shapeIri);
+    const ignoredProperties = ignoredHead === undefined
+        ? []
+        : walkRdfList(ignoredHead, { firstByNode: map.listFirst, restByNode: map.listRest }).values;
 
     return buildShapeFromRaw({
         name: shapeIri,
@@ -323,7 +399,45 @@ function buildShape(
         negativePredicates,
         closed,
         oneOf: oneOfs.map(currentOneOf => currentOneOf.map(path => path.map(predicateToParts))),
+        targets,
+        ignoredProperties,
     });
+}
+
+/**
+ * The targets declared for a shape. A shape that is also an rdfs:Class in the shapes graph targets
+ * its own instances (an implicit class target); as for any SHACL instance, the rdf:type may be a
+ * class declared, through rdfs:subClassOf, to be a subclass of rdfs:Class.
+ */
+function collectTargets(map: IMapTripleShacl, shapeIri: string): IShapeTargets {
+    const declared = map.targets.get(shapeIri);
+    const classes = new Set(declared?.classes ?? []);
+    const metaClasses = subClassesOf(map, RDFS.Class);
+    if (Array.from(map.types.get(shapeIri) ?? []).some(type => metaClasses.has(type))) {
+        classes.add(shapeIri);
+    }
+    return {
+        nodes: Array.from(declared?.nodes ?? []),
+        classes: Array.from(classes),
+        subjectsOf: Array.from(declared?.subjectsOf ?? []),
+        objectsOf: Array.from(declared?.objectsOf ?? []),
+    };
+}
+
+/** A class and every class declared, directly or transitively, to be a subclass of it. */
+function subClassesOf(map: IMapTripleShacl, superClass: string): Set<string> {
+    const result = new Set([superClass]);
+    let added = true;
+    while (added) {
+        added = false;
+        for (const [subClass, superClasses] of map.superClasses) {
+            if (!result.has(subClass) && Array.from(superClasses).some(value => result.has(value))) {
+                result.add(subClass);
+                added = true;
+            }
+        }
+    }
+    return result;
 }
 
 /** Collect all property-shape blank nodes reachable via sh:not from a shape IRI. */

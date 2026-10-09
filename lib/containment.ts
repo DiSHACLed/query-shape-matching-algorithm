@@ -2,6 +2,7 @@ import { Bindings, ContainmentType, IBindings } from './Binding'
 import { generateStarPatternUnion, shapeToQuery, type IQuery, type UnsupportedConstruct } from './query';
 import { ConstraintType, IConstraint, IShape } from './Shape';
 import type { IStarPatternWithDependencies } from './Triple';
+import { describesStarPattern, incomingRequiredPredicates } from './target';
 import type { Term } from '@rdfjs/types';
 
 /**
@@ -49,6 +50,7 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
     classificationStats.set(starPatternsName, {
       hasOpenShape: false,
       hasClosedShape: false,
+      hasUndescribedShape: false,
       rootTargetsOpen: new Set<string>(),
       rootTargetsClosed: new Set<string>(),
       containedTargets: new Set<string>(),
@@ -57,6 +59,7 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
   }
 
   // Evaluate each star pattern against each candidate shape.
+  const incoming = incomingRequiredPredicates(query.starPatterns);
   for (const { shape, dependencies } of groupedShapes) {
     bindingResult.set(shape.name, new Map());
     const bindingResultofShape = bindingResult.get(shape.name)!;
@@ -65,7 +68,8 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
       const bindings = new Bindings(shape, starPattern, dependencies, starPatternUnion);
       const filterCompatibility = evaluateFiltersForShape(query.filters, starPattern, shape);
       bindingResultofShape.set(starPatternName, { result: bindings, shape });
-      updateContainmentStats(classificationStats, starPatternName, shape, bindings, groupedShapes, filterCompatibility !== FilterTruth.FALSE);
+      const describes = describesStarPattern(shape, starPattern, incoming);
+      updateContainmentStats(classificationStats, starPatternName, shape, bindings, groupedShapes, filterCompatibility !== FilterTruth.FALSE, describes);
     }
   }
 
@@ -128,7 +132,10 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
         const bindings = rootTargetsClosed.length > 0 ? new Map(stats.bindings) : new Map();
         currentResult = { result: ContainmentResult.UNALINGED, target: unalignedTargets, bindings };
       } else {
-        const rejectedResult = stats.hasOpenShape ? ContainmentResult.WEAKLY_REJECTED : ContainmentResult.REJECTED;
+        // Rejection needs a shape that describes the star pattern and excludes it. Without any shape
+        // describing it, while the resource has shapes, nothing is known about the pattern.
+        const weaklyRejected = stats.hasOpenShape || (!stats.hasClosedShape && stats.hasUndescribedShape);
+        const rejectedResult = weaklyRejected ? ContainmentResult.WEAKLY_REJECTED : ContainmentResult.REJECTED;
         currentResult = { result: rejectedResult, bindings: new Map() };
       }
     }
@@ -198,12 +205,19 @@ function updateContainmentStats(
   bindings: IBindings,
   groupedShapes: IShapeWithDependencies[],
   filterCompatible = true,
+  describes = true,
 ): void {
   const stats = classificationStats.get(starPatternName)!;
+  // A shape with targets only constrains the nodes of its targets. When the nodes matching the star
+  // pattern need not be among them, its closedness and negative constraints say nothing about those
+  // nodes: it neither supports nor softens a rejection, and its matches count as on an open shape.
+  const closed = describes && shape.closed;
   // A shape that explicitly forbids a required predicate (sh:not) proves incompatibility, so it
   // must not count as the "open shape" that would soften REJECTED into WEAKLY_REJECTED.
-  const contradicts = bindings.hasNegativeContradiction();
-  if (shape.closed || contradicts) {
+  const contradicts = describes && bindings.hasNegativeContradiction();
+  if (!describes) {
+    stats.hasUndescribedShape = true;
+  } else if (closed || contradicts) {
     stats.hasClosedShape = true;
   } else {
     stats.hasOpenShape = true;
@@ -219,7 +233,7 @@ function updateContainmentStats(
   const hasRootMatch = bindings.getBoundTriple().length > 0 || bindings.hasNonRefutedDependency();
   if (hasRootMatch) {
     stats.bindings.set(shape.name, bindings);
-    if (shape.closed) {
+    if (closed) {
       stats.rootTargetsClosed.add(shape.name);
     } else {
       stats.rootTargetsOpen.add(shape.name);
@@ -1036,8 +1050,12 @@ interface IBindingStatus {
 }
 
 interface IContainmentStats {
+  // an open shape describes the star pattern
   hasOpenShape: boolean;
+  // a closed or contradicting shape describes the star pattern
   hasClosedShape: boolean;
+  // a shape with targets does not describe the star pattern
+  hasUndescribedShape: boolean;
   rootTargetsOpen: Set<string>;
   rootTargetsClosed: Set<string>;
   containedTargets: Set<string>;

@@ -14,6 +14,7 @@ It is implemented as a Node.js library to calculate the containment (subsumption
 - **Dependency Tracking**: Handles links between shapes, detecting when a star pattern depends on another to be fully bounded.
 - **Explicit Negation**: A predicate declared under SHACL `sh:not` or limited by `sh:maxCount 0` (or a ShEx negative triple constraint) never matches. Because such a shape states that the property must be absent, a query needing it is `REJECTED` even when the shape is open.
 - **Negated Triple Patterns**: A `FILTER NOT EXISTS` or `MINUS` over a single triple pattern `?s p ?o` (with `?s` bound by a required triple pattern and `?o` fresh) states that `?s` must not carry `p`. A shape that requires `p` (`sh:minCount` of at least 1) contradicts it, so the star pattern is `REJECTED` even when the shape is open. A `sh:not` of an input shape is translated the same way.
+- **SHACL Targets**: `sh:targetNode`, `sh:targetClass` (including implicit class targets), `sh:targetSubjectsOf` and `sh:targetObjectsOf` say which nodes a shape describes. The targets of a source shape become patterns about its focus node; the targets of a candidate shape are matched, and limit which star patterns its closedness can reject. See [Targets](#targets).
 
 ## How it Works
 
@@ -164,8 +165,8 @@ The library returns a report where each star pattern is assigned one of the foll
 | **`CONTAINED`**    | Every *required* triple pattern of every star pattern, including nested ones, is matched by the shape. Unmatched `OPTIONAL` patterns do not prevent this. |
 | **`ALIGNED`**      | At least one triple pattern from the root star pattern matches on an open shape. |
 | **`UNALINGED`**    | Partial root star pattern match on a closed shape; or match on a nested star pattern while having no match on root star pattern. A predicate the shape declares but whose `sh:node` dependency could not be established counts as such a partial match. |
-| **`WEAKLY_REJECTED`** | No triple pattern matches, and at least one candidate shape is open and does not forbid the predicates involved. |
-| **`REJECTED`**     | No triple pattern matches, and every shape that describes the pattern either is closed or explicitly forbids a required predicate through `sh:not` or `sh:maxCount 0`. Also returned when there is no candidate shape. |
+| **`WEAKLY_REJECTED`** | No triple pattern matches, and at least one candidate shape that describes the pattern is open and does not forbid the predicates involved, or no candidate shape describes it (see [Targets](#targets)). |
+| **`REJECTED`**     | No triple pattern matches, and every shape that describes the pattern (at least one) either is closed or explicitly forbids a required predicate through `sh:not` or `sh:maxCount 0`. Also returned when there is no candidate shape. |
 
 ### Nested dependencies
 
@@ -196,6 +197,52 @@ A source shape follows the cardinality semantics of its language. In SHACL, an a
 `sh:minCount` is 0 and an absent `sh:maxCount` is unbounded, so a property constraint
 without `sh:minCount` becomes an optional triple pattern. In ShEx, a triple constraint
 without a cardinality occurs exactly once, so it becomes a required one.
+
+### Targets
+
+The SHACL targets of a shape (`IShape.targets`: `nodes`, `classes`, `subjectsOf`, `objectsOf`)
+say which nodes it describes when it is used on its own. A shape that is also an
+`rdfs:Class` (or an instance of a class declared a subclass of `rdfs:Class` in the shapes
+graph) targets its own instances. SHACL ignores targets when a shape is reached through
+`sh:node`, and so does this library, on both sides.
+
+**Source shapes.** `shapeToQuery` translates the targets of the given shape into patterns
+about its focus node:
+
+- a class target requires `rdf:type` with the class as value, and a subjects-of target
+  requires its predicate;
+- node targets restrict the subject of the focus star pattern to the target nodes
+  (`IStarPatternWithDependencies.subjectValues`);
+- an objects-of target `p` adds a star pattern `?s p <focus>` that depends on the focus
+  star pattern;
+- several class and subjects-of targets become the branches of a UNION, as the branches
+  of an `sh:or` do, so a resource contains the shape only when every alternative is
+  covered.
+
+Node and objects-of targets combined with other targets, or several objects-of targets,
+cannot be represented: they are ignored and reported as `TARGETS` in `unsupported`, which
+can only over-estimate relevance. A shape without constraints whose targets are node
+targets asks for any triple about those nodes, and sets `matchesAnyTriple`.
+
+**Candidate shapes.** A target implies constraints that the shape does not declare: a
+class target implies `rdf:type` with a target class as value (matched by IRI, without
+subclass reasoning), and a subjects-of target implies its predicate. They match like
+declared constraints, and a closed shape does not forbid them. Since the focus nodes are
+the union of the nodes of the targets, an implied constraint is only required — for
+negated triple patterns — when every focus node carries it: when all the targets are
+class targets, or the only target is one subjects-of target. A closed shape also allows
+its `sh:ignoredProperties`. A shape whose only targets are node targets describes those
+nodes and nothing else, so it cannot contain a star pattern about another constant
+subject.
+
+A shape without targets describes every star pattern, as before. A shape with targets
+only constrains the nodes of its targets, so its closedness and negative constraints
+count only for a star pattern whose matching nodes are all in a target: its subject is a
+node target, it requires `rdf:type` with target classes only, it requires the predicate
+of a subjects-of target, or it is reached through a required triple pattern whose
+predicate is that of an objects-of target. For any other star pattern the shape neither
+supports nor softens a rejection, and its matches count as on an open shape. A closed
+shape targeting persons therefore does not reject a query about places.
 
 ### Examples of Containment Results
 
@@ -541,7 +588,7 @@ The report carries:
 | `result` | The aggregate result for the complete query (see above). |
 | `starPatternsContainment` | Per star pattern: its result, the matching shape IRIs, and the predicate-level bindings. |
 | `visitShapeBoundedResource` | Per shape: whether at least one triple pattern bound to it. Independent of `result`, and usable to decide whether to retrieve the data behind a shape. |
-| `unsupported` | Constructs discarded during normalization, if any. |
+| `unsupported` | Constructs discarded during normalization, if any, including the targets of a source shape that could not be translated (`TARGETS`). |
 
 ## SPARQL Limitations
 

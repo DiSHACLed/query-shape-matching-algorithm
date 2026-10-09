@@ -1623,7 +1623,7 @@ describe('query', () => {
                   ],
                 ]),
                 name: test1seq1.value,
-                isVariable: false,
+                isVariable: true,
               }
             ];
 
@@ -1727,7 +1727,7 @@ describe('query', () => {
                   ],
                 ]),
                 name: test1seq1.value,
-                isVariable: false,
+                isVariable: true,
               }
             ];
 
@@ -4285,7 +4285,7 @@ describe('query', () => {
                 ]
               ]),
               name: knowFirstBranchInter.value,
-              isVariable: false
+              isVariable: true
             }
           ];
 
@@ -4330,7 +4330,7 @@ describe('query', () => {
                 ]
               ]),
               name: knowSecondBranchInter.value,
-              isVariable: false
+              isVariable: true
             }
           ];
 
@@ -5220,7 +5220,7 @@ describe('query', () => {
           expect(union[0].starPatterns.size).toBe(1);
           for (const starPattern of union[0].starPatterns.values() ?? []) {
             expect(starPattern.name).toBeDefined();
-            expect(starPattern.isVariable).toBe(false);
+            expect(starPattern.isVariable).toBe(true);
 
             for (const pattern of starPattern.starPattern.values() ?? []) {
               expect(pattern.dependencies).toBeDefined();
@@ -5234,7 +5234,7 @@ describe('query', () => {
           expect(union[1].starPatterns.size).toBe(1);
           for (const starPattern of union[1].starPatterns.values() ?? []) {
             expect(starPattern.name).toBeDefined();
-            expect(starPattern.isVariable).toBe(false);
+            expect(starPattern.isVariable).toBe(true);
 
             for (const pattern of starPattern.starPattern.values() ?? []) {
               expect(pattern.dependencies).toBeDefined();
@@ -5897,7 +5897,7 @@ describe('query', () => {
                 ]
               ]),
               name: `${SNVOC_PREFIX}knows_rootPerson`,
-              isVariable: false,
+              isVariable: true,
             },
           ];
 
@@ -5939,7 +5939,7 @@ describe('query', () => {
                 ]
               ]),
               name: `${SNVOC_PREFIX}knows_fr`,
-              isVariable: false,
+              isVariable: true,
             },
           ];
 
@@ -6199,7 +6199,7 @@ describe('query', () => {
                 ]
               ]),
               name: `${SNVOC_PREFIX}knows_rootPerson`,
-              isVariable: false,
+              isVariable: true,
             },
           ];
 
@@ -6241,7 +6241,7 @@ describe('query', () => {
                 ]
               ]),
               name: `${SNVOC_PREFIX}knows_fr`,
-              isVariable: false,
+              isVariable: true,
             },
           ];
 

@@ -2,7 +2,7 @@ import type { Term } from '@rdfjs/types';
 import { algebraUtils, Algebra } from '@traqula/algebra-transformations-1-1';
 import { DataFactory } from 'rdf-data-factory';
 import { ITripleWithDependencies, Triple, type IStarPatternWithDependencies, ITriple } from './Triple';
-import { ConstraintType, ICardinality, IPredicate, IShape } from './Shape';
+import { ConstraintType, ICardinality, IPredicate, IShape, targetsOf } from './Shape';
 import { RDF, XSD } from './constant';
 
 const DF = new DataFactory();
@@ -62,8 +62,11 @@ export interface IQuery {
  * `NOT EXISTS` over a single triple pattern is supported as a negated triple pattern and is only
  * reported here when it is not of that form. An `EXISTS` or `NOT EXISTS` expression that is
  * discarded stays in its FILTER, where it is undecidable.
+ *
+ * `TARGETS` reports the targets of an input shape that could not be translated: node or objects-of
+ * targets combined with other targets, or several objects-of targets. They are ignored.
  */
-export type UnsupportedConstruct = 'MINUS' | 'SERVICE' | 'EXISTS' | 'NOT EXISTS';
+export type UnsupportedConstruct = 'MINUS' | 'SERVICE' | 'EXISTS' | 'NOT EXISTS' | 'TARGETS';
 
 export interface IShapeToQueryOptions {
   linkedShapes?: IShape[] | Map<string, IShape>;
@@ -76,6 +79,7 @@ interface IShapeToQueryBuildContext {
   unions: IQuery[][];
   visitedShapes: Set<string>;
   variableCounts: Map<string, number>;
+  unsupported: Set<UnsupportedConstruct>;
 }
 
 /**
@@ -87,6 +91,7 @@ interface IShapeToQueryBuildContext {
  * - Datatype + numeric/regex facets -> FILTER expressions
  * - SHAPE constraints -> dependent star patterns (when linked shapes are provided)
  * - oneOf/xone branches -> UNION branches
+ * - Targets of the given shape -> patterns about its focus node (see {@link addTargetsOfInputShape})
  *
  * Not supported (yet):
  * - closed/open world semantics
@@ -100,9 +105,12 @@ export function shapeToQuery(shape: IShape, options?: IShapeToQueryOptions): IQu
     unions: [],
     visitedShapes: new Set(),
     variableCounts: new Map(),
+    unsupported: new Set(),
   };
 
   buildStarPatternFromShape(shape, context);
+  addTargetsOfInputShape(shape, context);
+  const prunedSubjectRestriction = pruneEmptyStarPatterns(context);
 
   const query: IQuery = { starPatterns: context.starPatterns };
   if (context.filters.length > 0) {
@@ -111,8 +119,124 @@ export function shapeToQuery(shape: IShape, options?: IShapeToQueryOptions): IQu
   if (context.unions.length > 0) {
     query.union = context.unions;
   }
+  if (context.unsupported.size > 0) {
+    query.unsupported = Array.from(context.unsupported);
+  }
+  // A shape about given nodes that constrains none of their properties asks for any triple about them
+  if (context.starPatterns.size === 0 && prunedSubjectRestriction) {
+    query.matchesAnyTriple = true;
+  }
 
   return query;
+}
+
+/**
+ * Translate the targets of the input shape into patterns about its focus node. Only the input
+ * shape's own targets are translated: SHACL ignores the targets of the shapes it reaches through
+ * sh:node.
+ *
+ * - A class target requires `rdf:type` with the class as value.
+ * - A subjects-of target requires the predicate.
+ * - Several class and subjects-of targets are alternatives, because the focus nodes of a shape are
+ *   the union of the nodes of its targets: each target becomes a branch of a UNION, as the branches
+ *   of an sh:or do.
+ * - Node targets restrict the subject of the focus star pattern to the target nodes.
+ * - An objects-of target adds a star pattern whose triple pattern has the focus node as object.
+ *
+ * Node and objects-of targets are not representable as alternatives of other targets. When they are
+ * combined with other targets, or when several objects-of targets are declared, the targets are
+ * ignored and reported, which can only over-estimate relevance.
+ */
+function addTargetsOfInputShape(shape: IShape, context: IShapeToQueryBuildContext): void {
+  const { nodes, classes, subjectsOf, objectsOf } = targetsOf(shape);
+  const kinds = [ nodes, classes, subjectsOf, objectsOf ].filter(values => values.length > 0).length;
+  const focus = context.starPatterns.get(shape.name);
+  if (kinds === 0 || focus === undefined) {
+    return;
+  }
+
+  if (nodes.length > 0 || objectsOf.length > 0) {
+    if (kinds > 1 || objectsOf.length > 1) {
+      context.unsupported.add('TARGETS');
+      return;
+    }
+    if (nodes.length > 0) {
+      focus.subjectValues = new Set(nodes);
+      return;
+    }
+    const incomingName = `${shape.name}#targetObjectsOf`;
+    const triple = new Triple({ subject: incomingName, predicate: objectsOf[0], object: DF.namedNode(shape.name) });
+    context.starPatterns.set(incomingName, {
+      starPattern: new Map([[ objectsOf[0], { triple, dependencies: focus } ]]),
+      name: incomingName,
+      isVariable: true,
+    });
+    return;
+  }
+
+  const alternatives: ITripleWithDependencies[] = [];
+  for (const value of classes) {
+    alternatives.push({ triple: new Triple({ subject: shape.name, predicate: RDF.type, object: DF.namedNode(value) }) });
+  }
+  for (const predicate of subjectsOf) {
+    // A declared property constraint on the predicate keeps its object and dependency, but is now required
+    const declared = focus.starPattern.get(predicate);
+    const object = declared?.triple.object ?? DF.variable(nextVariableName(shape.name, predicate, context.variableCounts));
+    alternatives.push({ triple: new Triple({ subject: shape.name, predicate, object }), dependencies: declared?.dependencies });
+  }
+
+  if (alternatives.length === 1) {
+    focus.starPattern.set(alternatives[0].triple.predicate, alternatives[0]);
+    return;
+  }
+  context.unions.push(alternatives.map(alternative => ({
+    starPatterns: new Map([[ shape.name, {
+      starPattern: new Map([[ alternative.triple.predicate, alternative ]]),
+      name: shape.name,
+      isVariable: true,
+    } ]]),
+  })));
+}
+
+/**
+ * Remove the star patterns that constrain nothing: no triple pattern, no excluded predicate and no
+ * UNION branch. They come from shapes without positive constraints, such as a shape that only
+ * declares targets, and would otherwise count as unmatched. A triple pattern that pointed to one of
+ * them is kept, and matches on its predicate alone.
+ * @returns whether a removed star pattern restricted its subject to given nodes
+ */
+function pruneEmptyStarPatterns(context: IShapeToQueryBuildContext): boolean {
+  const inUnion = new Set<string>();
+  for (const union of context.unions) {
+    for (const branch of union) {
+      for (const name of branch.starPatterns.keys()) {
+        inUnion.add(name);
+      }
+    }
+  }
+  const removed = new Set<string>();
+  let prunedSubjectRestriction = false;
+  for (const [ name, starPattern ] of context.starPatterns) {
+    if (starPattern.starPattern.size === 0 && (starPattern.excludedPredicates?.size ?? 0) === 0 && !inUnion.has(name)) {
+      removed.add(name);
+      prunedSubjectRestriction = prunedSubjectRestriction || starPattern.subjectValues !== undefined;
+    }
+  }
+  for (const name of removed) {
+    context.starPatterns.delete(name);
+  }
+  const remaining = [
+    ...context.starPatterns.values(),
+    ...context.unions.flatMap(union => union.flatMap(branch => [ ...branch.starPatterns.values() ])),
+  ];
+  for (const starPattern of remaining) {
+    for (const tripleWithDependencies of starPattern.starPattern.values()) {
+      if (tripleWithDependencies.dependencies !== undefined && removed.has(tripleWithDependencies.dependencies.name)) {
+        tripleWithDependencies.dependencies = undefined;
+      }
+    }
+  }
+  return prunedSubjectRestriction;
 }
 
 /**
@@ -283,6 +407,14 @@ function nextVariableName(shapeName: string, predicate: string, variableCounts: 
   const currentCount = variableCounts.get(base) ?? 0;
   variableCounts.set(base, currentCount + 1);
   return currentCount === 0 ? base : `${base}_${currentCount}`;
+}
+
+/**
+ * Whether a subject is a variable of the pattern. A blank node in a SPARQL pattern behaves as a
+ * variable that is not projected.
+ */
+function isVariableTerm(term: Term): boolean {
+  return term.termType === 'Variable' || term.termType === 'BlankNode';
 }
 
 /**
@@ -911,7 +1043,7 @@ namespace QueryHandler {
         });
         if (startPattern === undefined) {
           accumulatedTriples.set(subject.value,
-            { triples: new Map([[triple.toString(), triple]]), isVariable: subject.termType === "Variable" });
+            { triples: new Map([[triple.toString(), triple]]), isVariable: isVariableTerm(subject) });
         } else {
           startPattern.triples.set(triple.toString(), triple);
         }
@@ -951,7 +1083,7 @@ namespace QueryHandler {
           cardinality,
           isOptional: optional
         }),
-        isVariable: subject.termType === "Variable"
+        isVariable: isVariableTerm(subject)
       };
     }
   }
@@ -1109,7 +1241,7 @@ namespace QueryHandler {
     accumulatedTriples.set(subject.value,
       {
         triples: new Map([[triple.toString(), triple]]),
-        isVariable: subject.termType === "Variable"
+        isVariable: isVariableTerm(subject)
       });
   }
 
@@ -1156,7 +1288,7 @@ namespace QueryHandler {
     accumulatedTriples.set(subject.value,
       {
         triples: new Map([[triple.toString(), triple]]),
-        isVariable: subject.termType === "Variable"
+        isVariable: isVariableTerm(subject)
       });
 
   }
@@ -1196,7 +1328,7 @@ namespace QueryHandler {
         negatedSet: negatedSet,
         isOptional: optional
       }),
-      isVariable: subject.termType === "Variable"
+      isVariable: isVariableTerm(subject)
     };
   }
 

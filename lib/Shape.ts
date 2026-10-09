@@ -108,6 +108,22 @@ export const enum ConstraintType {
   DATATYPE,
 }
 /**
+ * The SHACL targets of a shape: the nodes it describes when it is used on its own. SHACL ignores
+ * them when the shape is reached through `sh:node`. A shape with no target at all is treated as
+ * describing any node.
+ */
+export interface IShapeTargets {
+  // sh:targetNode values (a literal is kept in its JSON-quoted form)
+  nodes: string[];
+  // sh:targetClass values, and the shape itself when it is also an rdfs:Class (implicit class target)
+  classes: string[];
+  // sh:targetSubjectsOf values
+  subjectsOf: string[];
+  // sh:targetObjectsOf values
+  objectsOf: string[];
+}
+
+/**
  * A simple Shape object
  */
 export interface IShapeObj {
@@ -116,6 +132,10 @@ export interface IShapeObj {
   positivePredicates: string[];
   negativePredicates?: string[];
   oneOf?: OneOf[];
+  // only present when the shape declares at least one target
+  targets?: IShapeTargets;
+  // sh:ignoredProperties of a closed shape; only present when there is at least one
+  ignoredProperties?: string[];
 }
 
 /**
@@ -128,6 +148,28 @@ export interface IShapeArgs {
   linkedShapeIri?: string[]
   closed?: boolean;
   oneOf?: OneOf[];
+  targets?: Partial<IShapeTargets>;
+  ignoredProperties?: string[];
+}
+
+/**
+ * The targets of a shape, with an empty list for every kind it does not declare.
+ */
+export function targetsOf(shape: IShapeObj): IShapeTargets {
+  return {
+    nodes: shape.targets?.nodes ?? [],
+    classes: shape.targets?.classes ?? [],
+    subjectsOf: shape.targets?.subjectsOf ?? [],
+    objectsOf: shape.targets?.objectsOf ?? [],
+  };
+}
+
+/**
+ * Whether a shape declares at least one target.
+ */
+export function hasTargets(shape: IShapeObj): boolean {
+  const { nodes, classes, subjectsOf, objectsOf } = targetsOf(shape);
+  return nodes.length + classes.length + subjectsOf.length + objectsOf.length > 0;
 }
 
 export type OneOf = OneOfPath[];
@@ -165,15 +207,24 @@ export class Shape implements IShape {
   private readonly predicates = new Map<string, IPredicate>();
   public readonly oneOf: OneOf[];
   public readonly oneOfIndexed: OneOfIndexed[] = [];
+  public readonly targets: IShapeTargets;
+  public readonly ignoredProperties: string[];
 
   /**
    *
    * @param {IShapeArgs} args - The argument to build a shape
    */
-  public constructor({ name, positivePredicates, negativePredicates, closed, oneOf }: IShapeArgs) {
+  public constructor({ name, positivePredicates, negativePredicates, closed, oneOf, targets, ignoredProperties }: IShapeArgs) {
     this.name = name;
     this.closed = closed ?? false;
     this.oneOf = oneOf ? oneOf : [];
+    this.targets = {
+      nodes: [...targets?.nodes ?? []],
+      classes: [...targets?.classes ?? []],
+      subjectsOf: [...targets?.subjectsOf ?? []],
+      objectsOf: [...targets?.objectsOf ?? []],
+    };
+    this.ignoredProperties = [...ignoredProperties ?? []];
     const linkedShapeIri = new Set<string>();
     for (const oneOf of this.oneOf) {
       const currentOneOf: OneOfIndexed = [];
@@ -251,6 +302,11 @@ export class Shape implements IShape {
     Object.freeze(this.closed);
     Object.freeze(this.oneOf);
     Object.freeze(this.oneOfIndexed);
+    for (const values of Object.values(this.targets)) {
+      Object.freeze(values);
+    }
+    Object.freeze(this.targets);
+    Object.freeze(this.ignoredProperties);
     Object.freeze(this);
   }
 
@@ -270,13 +326,20 @@ export class Shape implements IShape {
   }
 
   public toObject(): IShapeObj {
-    return {
+    const obj: IShapeObj = {
       name: this.name,
       closed: this.closed,
       positivePredicates: this.positivePredicates,
       negativePredicates: this.negativePredicates,
       oneOf: this.oneOf
     };
+    if (hasTargets(this)) {
+      obj.targets = this.targets;
+    }
+    if (this.ignoredProperties.length > 0) {
+      obj.ignoredProperties = this.ignoredProperties;
+    }
+    return obj;
   }
 
   public toJson():  IShapeJson{
@@ -410,6 +473,8 @@ export interface IRawShape {
   positivePredicates: IPredicateParts[];
   negativePredicates?: string[];
   oneOf?: IRawOneOf[];
+  targets?: Partial<IShapeTargets>;
+  ignoredProperties?: string[];
 }
 
 export type IRawOneOfPath = IPredicateParts[];
@@ -431,6 +496,8 @@ export function buildShapeFromRaw(raw: IRawShape): IShape | ShapeError {
       negativePredicates: raw.negativePredicates ?? [],
       closed: raw.closed ?? false,
       oneOf,
+      targets: raw.targets,
+      ignoredProperties: raw.ignoredProperties,
     });
   } catch (error: unknown) {
     return error as ShapeError;
@@ -609,6 +676,10 @@ function detectShapeFormat(quads: RDFJS.Quad[]): ShapeFormat | undefined {
       || quad.predicate.equals(SHACL.terms.xone)
       || quad.predicate.equals(SHACL.terms.node)
       || quad.predicate.equals(SHACL.terms.datatype)
+      || quad.predicate.equals(SHACL.terms.targetNode)
+      || quad.predicate.equals(SHACL.terms.targetClass)
+      || quad.predicate.equals(SHACL.terms.targetSubjectsOf)
+      || quad.predicate.equals(SHACL.terms.targetObjectsOf)
     ) {
       shaclScore++;
     }

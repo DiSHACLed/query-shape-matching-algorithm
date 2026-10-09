@@ -41,7 +41,12 @@ export const SHACL = createVocabulary(
   "node",
   "or",
   "xone",
-  "not"
+  "not",
+  "targetNode",
+  "targetClass",
+  "targetSubjectsOf",
+  "targetObjectsOf",
+  "ignoredProperties"
 );
 
 export const SHEX = createVocabulary(
@@ -78,6 +83,12 @@ export const RDF = createVocabulary(
   "first",
   "rest",
   "nil"
+);
+
+export const RDFS = createVocabulary(
+  "http://www.w3.org/2000/01/rdf-schema#",
+  "Class",
+  "subClassOf"
 );
 
 export const XSD = createVocabulary(
