@@ -1,4 +1,5 @@
 # query-shape-matching-algorithm
+[![CI](https://github.com/DiSHACLed/query-shape-matching-algorithm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DiSHACLed/query-shape-matching-algorithm/actions/workflows/ci.yml)
 [![npm version](https://badge.fury.io/js/query-shape-matching.svg)](https://www.npmjs.com/package/query-shape-matching)
 
 Reference implementation for the query/shape matching algorithm described in the discovery specification.
