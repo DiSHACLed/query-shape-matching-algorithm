@@ -13,6 +13,7 @@ It is implemented as a Node.js library to calculate the containment (subsumption
 - **Alignment Detection**: Identifies how closely a query matches the constraints defined in a shape.
 - **Dependency Tracking**: Handles links between shapes, detecting when a star pattern depends on another to be fully bounded.
 - **Explicit Negation**: A predicate declared under SHACL `sh:not` or limited by `sh:maxCount 0` (or a ShEx negative triple constraint) never matches. Because such a shape states that the property must be absent, a query needing it is `REJECTED` even when the shape is open.
+- **Negated Triple Patterns**: A `FILTER NOT EXISTS` or `MINUS` over a single triple pattern `?s p ?o` (with `?s` bound by a required triple pattern and `?o` fresh) states that `?s` must not carry `p`. A shape that requires `p` (`sh:minCount` of at least 1) contradicts it, so the star pattern is `REJECTED` even when the shape is open. A `sh:not` of an input shape is translated the same way.
 
 ## How it Works
 
@@ -547,7 +548,8 @@ The report carries:
 The detection logic is focused on **Triple Patterns** and **Star Patterns**. Currently, the following SPARQL features are not (yet) supported:
 
 - **Filter Expressions**: FILTERs are only used to detect contradictions with shape constraints (for example numeric comparisons against non-numeric datatype constraints). Expressions that cannot be safely compared to shape constraints are conservatively ignored for containment decisions.
-- **Negative Patterns**: `MINUS` and `FILTER NOT EXISTS` are discarded. Their triple patterns describe solutions to exclude, not data the resource must hold, so collecting them as ordinary patterns would move the result in both directions.
+- **Negative Patterns**: `MINUS` and `FILTER NOT EXISTS` are only supported over a single triple pattern, as negated triple patterns (see above). Any other form is discarded: its triple patterns describe solutions to exclude, not data the resource must hold, so collecting them as ordinary patterns would move the result in both directions.
+- **Existence Tests**: Any other `EXISTS` or `NOT EXISTS` stays in its `FILTER` but is undecidable, so it never causes a rejection; the rest of the expression is still evaluated. It is reported as discarded.
 - **Complex Property Paths**: While simple paths are supported, complex or recursive property paths are not considered yet.
 - **Aggregates & Subqueries**: `GROUP BY`, `HAVING`, and subqueries are not processed.
 - **Federated Queries**: `SERVICE` clauses are discarded, since they read data from another endpoint.

@@ -26,9 +26,10 @@ export interface IBindings {
     shouldVisitShape: () => boolean;
     /**
      * Indicate that the shape explicitly forbids a predicate required by the star pattern
-     * (SHACL sh:not / ShEx negative triple constraint). This is definitive evidence of
-     * incompatibility, independently of whether the shape is closed.
-     * @returns {boolean} whether the shape contradicts a required triple pattern
+     * (SHACL sh:not / ShEx negative triple constraint), or requires (minimum cardinality of at
+     * least one) a predicate the star pattern excludes (a negated triple pattern). This is
+     * definitive evidence of incompatibility, independently of whether the shape is closed.
+     * @returns {boolean} whether the shape contradicts the star pattern
      */
     hasNegativeContradiction: () => boolean;
     /**
@@ -195,6 +196,16 @@ export class Bindings implements IBindings {
 
 
         }
+        // A predicate the star pattern excludes but the shape requires in its body is carried by
+        // every conforming node, so no data conforming to the shape answers the star pattern.
+        if (!this.strict) {
+            for (const excludedPredicate of starPattern.excludedPredicates ?? []) {
+                const declaredPredicate = shape.get(excludedPredicate);
+                if (declaredPredicate?.negative !== true && (declaredPredicate?.cardinality?.min ?? 0) >= 1) {
+                    this.negativeContradiction = true;
+                }
+            }
+        }
         // negative triple in a strict containment mean that the we can take any values
         // see paper https://link.springer.com/chapter/10.1007/978-3-319-25007-6_1
         if (!this.strict) {
@@ -230,7 +241,7 @@ export class Bindings implements IBindings {
                     }
                 }
             }
-            this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion;
+            this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion && !this.negativeContradiction;
         } else {
             let boundedUnion = true;
             for (const unionBinding of this.unionBindings) {
@@ -245,7 +256,7 @@ export class Bindings implements IBindings {
                     }
                 }
             }
-            this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion;
+            this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion && !this.negativeContradiction;
         }
         if (this.fullyBounded) {
             const cycle = new Set<string>();

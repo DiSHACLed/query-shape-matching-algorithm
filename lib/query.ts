@@ -25,8 +25,11 @@ type NpsPath = Omit<Algebra.Path, 'predicate'> & {
 
 interface IAccumulatedTriples { triples: Map<string, ITriple>, isVariable: boolean }
 
+/** A negated triple pattern, waiting to be attached to the star pattern of its subject. */
+interface INegatedPattern { subject: string, predicate: string, construct: 'MINUS' | 'NOT EXISTS' }
+
 /** Facts about the input discovered while walking the algebra, not carried by the star patterns. */
-interface INormalizationState { matchesAnyTriple: boolean }
+interface INormalizationState { matchesAnyTriple: boolean, negatedPatterns: INegatedPattern[] }
 
 /**
  * A query divided into star patterns
@@ -55,9 +58,12 @@ export interface IQuery {
 }
 
 /**
- * A SPARQL construct outside the supported profile, discarded during normalization.
+ * A SPARQL construct outside the supported profile, discarded during normalization. A `MINUS` or
+ * `NOT EXISTS` over a single triple pattern is supported as a negated triple pattern and is only
+ * reported here when it is not of that form. An `EXISTS` or `NOT EXISTS` expression that is
+ * discarded stays in its FILTER, where it is undecidable.
  */
-export type UnsupportedConstruct = 'MINUS' | 'SERVICE';
+export type UnsupportedConstruct = 'MINUS' | 'SERVICE' | 'EXISTS' | 'NOT EXISTS';
 
 export interface IShapeToQueryOptions {
   linkedShapes?: IShape[] | Map<string, IShape>;
@@ -77,13 +83,13 @@ interface IShapeToQueryBuildContext {
  *
  * Supported mapping:
  * - Positive predicates -> triple patterns
+ * - Negative predicates -> negated triple patterns (excluded predicates of the star pattern)
  * - Datatype + numeric/regex facets -> FILTER expressions
  * - SHAPE constraints -> dependent star patterns (when linked shapes are provided)
  * - oneOf/xone branches -> UNION branches
  *
  * Not supported (yet):
  * - closed/open world semantics
- * - negative predicates
  */
 export function shapeToQuery(shape: IShape, options?: IShapeToQueryOptions): IQuery {
   const shapeIndex = normalizeShapeIndex(shape, options?.linkedShapes);
@@ -177,6 +183,10 @@ function buildStarPatternFromShape(shape: IShape, context: IShapeToQueryBuildCon
 
     const tripleWithDependencies = predicateToTripleWithDependencies(shape.name, predicate, context, context.filters);
     starPattern.starPattern.set(predicate.name, tripleWithDependencies);
+  }
+  const negativePredicates = shape.negativePredicates ?? [];
+  if (negativePredicates.length > 0) {
+    starPattern.excludedPredicates = new Set(negativePredicates);
   }
 
   context.starPatterns.set(shape.name, starPattern);
@@ -403,7 +413,7 @@ export function generateQuery(algebraQuery: Algebra.Operation, optional?: boolea
   const accumulatedUnion: IQuery[][] = [];
   const accumulatedFilters: Algebra.Expression[] = [];
   const accumulatedUnsupported = new Set<UnsupportedConstruct>();
-  const state: INormalizationState = { matchesAnyTriple: false };
+  const state: INormalizationState = { matchesAnyTriple: false, negatedPatterns: [] };
 
   QueryHandler.collectFromAlgebra(algebraQuery, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, optional, accumulatedUnsupported, state);
 
@@ -419,13 +429,10 @@ function buildQuery(
   accumulatedUnion: IQuery[][],
   filters: Algebra.Expression[] = [],
   unsupported: Set<UnsupportedConstruct> = new Set(),
-  state: INormalizationState = { matchesAnyTriple: false },
+  state: INormalizationState = { matchesAnyTriple: false, negatedPatterns: [] },
 ): IQuery {
   const innerQuery = new Map<string, IStarPatternWithDependencies>();
   const resp: IQuery = { starPatterns: innerQuery };
-  if (unsupported.size > 0) {
-    resp.unsupported = Array.from(unsupported);
-  }
   if (state.matchesAnyTriple) {
     resp.matchesAnyTriple = true;
   }
@@ -478,6 +485,23 @@ function buildQuery(
     for (const tripleWithDependencies of starPatternWithDependencies.starPattern.values()) {
       addADependencyToStarPattern(tripleWithDependencies, innerQuery);
     }
+  }
+
+  // A negated triple pattern constrains the star pattern of its subject. Without a required triple
+  // pattern there, the subject need not be bound at all, so the negation is discarded instead.
+  for (const { subject, predicate, construct } of state.negatedPatterns) {
+    const starPattern = innerQuery.get(subject);
+    const hasRequiredTriple = starPattern !== undefined &&
+      Array.from(starPattern.starPattern.values()).some(({ triple }) => triple.isOptional !== true);
+    if (!hasRequiredTriple) {
+      unsupported.add(construct);
+      continue;
+    }
+    starPattern.excludedPredicates ??= new Set();
+    starPattern.excludedPredicates.add(predicate);
+  }
+  if (unsupported.size > 0) {
+    resp.unsupported = Array.from(unsupported);
   }
   addUnionDependencies(resp)
   return resp;
@@ -569,7 +593,7 @@ namespace QueryHandler {
     accumulatedFilters: Algebra.Expression[],
     optional?: boolean,
     unsupported: Set<UnsupportedConstruct> = new Set(),
-    state: INormalizationState = { matchesAnyTriple: false },
+    state: INormalizationState = { matchesAnyTriple: false, negatedPatterns: [] },
   ): void {
     algebraUtils.visitOperation(
       rootAlgebra,
@@ -580,7 +604,8 @@ namespace QueryHandler {
         },
         // MINUS removes solutions and SERVICE evaluates elsewhere, so neither describes data the
         // candidate resource must hold. Their triple patterns must not be collected as required
-        // patterns: doing so both inflates and deflates relevance.
+        // patterns: doing so both inflates and deflates relevance. A MINUS over a single triple
+        // pattern is kept as a negated triple pattern instead.
         [Algebra.Types.MINUS]: {
           preVisitor: () => ({ continue: false }),
           visitor: handleMinus(accumulatedTriples, accumulatedValues, accumulatedFilters, accumulatedUnion, unsupported, state, optional),
@@ -595,7 +620,7 @@ namespace QueryHandler {
         },
         [Algebra.Types.UNION]: {
           preVisitor: () => ({ continue: false }),
-          visitor: handleUnion(accumulatedUnion, optional),
+          visitor: handleUnion(accumulatedUnion, unsupported, optional),
         },
         [Algebra.Types.LEFT_JOIN]: {
           preVisitor: () => ({ continue: false }),
@@ -606,9 +631,9 @@ namespace QueryHandler {
           visitor: handlePropertyPath(accumulatedTriples, accumulatedUnion, accumulatedValues, optional),
         },
         [Algebra.Types.FILTER]: {
-          visitor: handleFilter(accumulatedFilters),
-          // Ignore the expression subtree for now (e.g. FILTER NOT EXISTS) to avoid collecting
-          // inner patterns that belong to the filter condition, not the query body.
+          visitor: handleFilter(accumulatedFilters, unsupported, state, optional),
+          // Ignore the expression subtree (e.g. FILTER NOT EXISTS) to avoid collecting inner
+          // patterns that belong to the filter condition, not the query body.
           preVisitor: () => ({ ignoreKeys: new Set(['expression']) }),
         },
       },
@@ -616,8 +641,9 @@ namespace QueryHandler {
   }
 
   /**
-   * Keep the left operand of a MINUS and discard the right one: the removed patterns describe
-   * solutions to exclude, not data the candidate resource has to hold.
+   * Keep the left operand of a MINUS. The right one describes solutions to exclude, not data the
+   * candidate resource has to hold: it becomes a negated triple pattern when it is a single triple
+   * pattern of the supported form, and is discarded otherwise.
    */
   function handleMinus(accumulatedTriples: Map<string, IAccumulatedTriples>,
     accumulatedValues: Map<string, Term[]>,
@@ -627,8 +653,14 @@ namespace QueryHandler {
     state: INormalizationState,
     optional?: boolean): (element: Algebra.Minus) => void {
     return (element: Algebra.Minus): void => {
-      unsupported.add('MINUS');
-      collectFromAlgebra(element.input[0], accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, optional, unsupported, state);
+      const [left, right] = element.input;
+      const negatedPattern = optional === true ? undefined : toNegatedPattern(right, left);
+      if (negatedPattern !== undefined) {
+        state.negatedPatterns.push({ ...negatedPattern, construct: 'MINUS' });
+      } else {
+        unsupported.add('MINUS');
+      }
+      collectFromAlgebra(left, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, optional, unsupported, state);
     }
   }
 
@@ -646,17 +678,140 @@ namespace QueryHandler {
       const requiredElements = joinElement[0];
       const optionalElements = joinElement[1];
 
+      // A filter of the OPTIONAL group only decides whether the optional part binds; it is not
+      // evaluated, but an EXISTS or NOT EXISTS inside it is still reported as discarded.
+      if (element.expression !== undefined) {
+        reportExistence(element.expression, unsupported);
+      }
       collectFromAlgebra(requiredElements, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, undefined, unsupported, state);
       collectFromAlgebra(optionalElements, accumulatedTriples, accumulatedValues, accumulatedUnion, accumulatedFilters, true, unsupported, state);
     }
   }
 
   /**
-   * Record a top-level FILTER expression without traversing into its expression subtree.
+   * Record a top-level FILTER expression without traversing into its expression subtree. A
+   * `NOT EXISTS` over a single triple pattern of the supported form becomes a negated triple
+   * pattern; any other `EXISTS` or `NOT EXISTS` stays in the expression, where it is undecidable,
+   * and is reported as discarded.
    */
-  function handleFilter(accumulatedFilters: Algebra.Expression[]): (element: Algebra.Filter) => void {
+  function handleFilter(accumulatedFilters: Algebra.Expression[],
+    unsupported: Set<UnsupportedConstruct>,
+    state: INormalizationState,
+    optional?: boolean): (element: Algebra.Filter) => void {
     return (element: Algebra.Filter): void => {
+      const negatedInput = getNegatedExistenceInput(element.expression);
+      const negatedPattern = negatedInput === undefined || optional === true ?
+        undefined :
+        toNegatedPattern(negatedInput, element.input);
+      if (negatedPattern !== undefined) {
+        state.negatedPatterns.push({ ...negatedPattern, construct: 'NOT EXISTS' });
+        return;
+      }
+      reportExistence(element.expression, unsupported);
       accumulatedFilters.push(element.expression);
+    }
+  }
+
+  /**
+   * Return the graph pattern of a `NOT EXISTS` (or `!EXISTS`) expression, or undefined when the
+   * expression is anything else.
+   */
+  function getNegatedExistenceInput(expression: Algebra.Expression): Algebra.Operation | undefined {
+    if (expression.subType === Algebra.ExpressionTypes.EXISTENCE) {
+      return expression.not ? expression.input : undefined;
+    }
+    if (expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '!' &&
+      expression.args.length === 1 && expression.args[0].subType === Algebra.ExpressionTypes.EXISTENCE &&
+      !expression.args[0].not) {
+      return expression.args[0].input;
+    }
+    return undefined;
+  }
+
+  /**
+   * Read a negated graph pattern as a negated triple pattern `?x p ?o`. The pattern must be a single
+   * triple pattern with a variable subject and an IRI predicate; its subject must be bound by a
+   * required triple pattern of `scope`, the group the negation applies to (the filtered group of a
+   * FILTER, the left operand of a MINUS); and its object must be a blank node or a variable that
+   * does not occur in `scope`. The negation then removes exactly the solutions whose subject
+   * carries `p`, so `MINUS` and `NOT EXISTS` coincide. Any other form returns undefined.
+   */
+  function toNegatedPattern(negated: Algebra.Operation, scope: Algebra.Operation):
+    Omit<INegatedPattern, 'construct'> | undefined {
+    if (negated.type !== Algebra.Types.BGP || negated.patterns.length !== 1) {
+      return undefined;
+    }
+    const { subject, predicate, object, graph } = negated.patterns[0];
+    if (subject.termType !== 'Variable' || predicate.termType !== 'NamedNode' ||
+      graph.termType !== 'DefaultGraph') {
+      return undefined;
+    }
+    const freshObject = object.termType === 'BlankNode' ||
+      (object.termType === 'Variable' && !occursIn(object.value, scope));
+    if (!freshObject || !getRequiredSubjects(scope).has(subject.value)) {
+      return undefined;
+    }
+    return { subject: subject.value, predicate: predicate.value };
+  }
+
+  /**
+   * Subjects of the triple patterns with an IRI predicate that every solution of `operation` binds.
+   * The approximation is conservative: operations it does not know contribute no subject.
+   */
+  function getRequiredSubjects(operation: Algebra.Operation): Set<string> {
+    switch (operation.type) {
+      case Algebra.Types.BGP:
+        return new Set(operation.patterns
+          .filter(pattern => pattern.subject.termType === 'Variable' && pattern.predicate.termType === 'NamedNode')
+          .map(pattern => pattern.subject.value));
+      case Algebra.Types.JOIN:
+        return new Set(operation.input.flatMap(input => Array.from(getRequiredSubjects(input))));
+      case Algebra.Types.LEFT_JOIN:
+      case Algebra.Types.MINUS:
+        return getRequiredSubjects(operation.input[0]);
+      case Algebra.Types.FILTER:
+      case Algebra.Types.EXTEND:
+      case Algebra.Types.DISTINCT:
+      case Algebra.Types.REDUCED:
+      case Algebra.Types.ORDER_BY:
+      case Algebra.Types.GRAPH:
+        return getRequiredSubjects(operation.input);
+      case Algebra.Types.UNION: {
+        const [first, ...rest] = operation.input.map(getRequiredSubjects);
+        return new Set(Array.from(first ?? []).filter(subject => rest.every(branch => branch.has(subject))));
+      }
+      default:
+        return new Set();
+    }
+  }
+
+  /**
+   * Whether the variable occurs anywhere in the operation, including its expressions.
+   */
+  function occursIn(variable: string, operation: unknown): boolean {
+    if (typeof operation !== 'object' || operation === null) {
+      return false;
+    }
+    const node = operation as { termType?: unknown, value?: unknown };
+    if (node.termType === 'Variable' && node.value === variable) {
+      return true;
+    }
+    return Object.values(operation).some(child => occursIn(variable, child));
+  }
+
+  /**
+   * Report every `EXISTS` and `NOT EXISTS` of an expression as a discarded construct.
+   */
+  function reportExistence(expression: Algebra.Expression, unsupported: Set<UnsupportedConstruct>, negated = false): void {
+    if (expression.subType === Algebra.ExpressionTypes.EXISTENCE) {
+      unsupported.add(expression.not !== negated ? 'NOT EXISTS' : 'EXISTS');
+      return;
+    }
+    if (expression.subType === Algebra.ExpressionTypes.OPERATOR || expression.subType === Algebra.ExpressionTypes.NAMED) {
+      const negatesArgument = expression.subType === Algebra.ExpressionTypes.OPERATOR && expression.operator === '!';
+      for (const argument of expression.args) {
+        reportExistence(argument, unsupported, negatesArgument);
+      }
     }
   }
 
@@ -694,12 +849,17 @@ namespace QueryHandler {
   /**
    * Convert a SPARQL UNION into a list of independently generated query branches.
    */
-  function handleUnion(accumulatedUnion: IQuery[][], optional?: boolean): (element: Algebra.Union) => void {
+  function handleUnion(accumulatedUnion: IQuery[][], unsupported: Set<UnsupportedConstruct>, optional?: boolean): (element: Algebra.Union) => void {
     return (element: Algebra.Union): void => {
       const branches: Algebra.Operation[] = element.input;
       const currentUnion: IQuery[] = [];
       for (const branch of branches) {
-        currentUnion.push(generateQuery(branch, optional))
+        const branchQuery = generateQuery(branch, optional);
+        // A construct discarded inside a branch is discarded from the query as a whole.
+        for (const construct of branchQuery.unsupported ?? []) {
+          unsupported.add(construct);
+        }
+        currentUnion.push(branchQuery);
       }
       accumulatedUnion.push(currentUnion);
     };

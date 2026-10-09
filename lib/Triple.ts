@@ -9,6 +9,11 @@ export interface IStarPatternWithDependencies {
   starPattern: Map<string, ITripleWithDependencies>;
   name: string;
   isVariable: boolean;
+  /**
+   * Predicates the subject must not carry: negated triple patterns from a `FILTER NOT EXISTS` or
+   * `MINUS` over a single triple pattern, or negative predicates of an input shape.
+   */
+  excludedPredicates?: Set<string>;
 }
 
 export interface ITripleWithDependencies {

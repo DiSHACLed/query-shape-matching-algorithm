@@ -83,10 +83,16 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
         if (stats === undefined) {
           continue;
         }
-        if (evidence.closed) {
+        // As for a candidate shape, a contradiction is evidence of incompatibility: the referenced
+        // shape counts as closed and contributes no match.
+        const contradicts = evidence.bindings.hasNegativeContradiction();
+        if (evidence.closed || contradicts) {
           stats.hasClosedShape = true;
         } else {
           stats.hasOpenShape = true;
+        }
+        if (contradicts) {
+          continue;
         }
         if (evidence.contained) {
           stats.containedTargets.add(evidence.shapeName);
@@ -605,8 +611,8 @@ function evaluateRegexCompatibility(args: unknown[], context: IFilterEvalContext
     return FilterTruth.TRUE;
   }
 
-  // FALSE when prefix/literal heuristics identify an obvious incompatibility.
-  if (hasRegexPrefixIncompatibility(variableConstraint.pattern, regexPattern)) {
+  // FALSE only when no string can match both literal patterns.
+  if (hasRegexPrefixIncompatibility(variableConstraint.pattern, variableConstraint.flags, regexPattern, regexFlags)) {
     return FilterTruth.FALSE;
   }
 
@@ -676,29 +682,53 @@ function buildRegex(pattern: string, flags?: string): RegExp | undefined {
   }
 }
 
-function hasRegexPrefixIncompatibility(shapePattern: string, filterPattern: string): boolean {
-  const shapePrefix = extractAnchoredLiteralPrefix(shapePattern);
-  const filterPrefix = extractAnchoredLiteralPrefix(filterPattern);
-  // Different anchored prefixes cannot both hold (e.g., ^foo vs ^bar).
-  if (shapePrefix !== undefined && filterPrefix !== undefined && shapePrefix.prefix !== filterPrefix.prefix) {
-    return true;
-  }
-
-  const shapeContains = extractContainsLiteral(shapePattern);
-  const filterContains = extractContainsLiteral(filterPattern);
-  if (shapeContains !== undefined && filterContains !== undefined && shapeContains !== filterContains) {
+function hasRegexPrefixIncompatibility(
+  shapePattern: string,
+  shapeFlags: string | undefined,
+  filterPattern: string,
+  filterFlags: string,
+): boolean {
+  // Flags change what a literal pattern matches (`i` folds case, `x` drops whitespace, `q` makes `^` and `$` literal,
+  // `m` anchors at every line), so a contradiction is only decided between patterns without flags.
+  if ((shapeFlags ?? '') !== '' || filterFlags !== '') {
     return false;
   }
 
-  // Mixed anchored-prefix/plain-literal incompatibility checks.
-  if (shapePrefix !== undefined && filterContains !== undefined && !shapePrefix.prefix.includes(filterContains) && !filterContains.includes(shapePrefix.prefix)) {
-    return true;
+  const shapePrefix = extractAnchoredLiteralPrefix(shapePattern);
+  const filterPrefix = extractAnchoredLiteralPrefix(filterPattern);
+  if (shapePrefix !== undefined && filterPrefix !== undefined) {
+    return !areAnchoredLiteralsCompatible(shapePrefix, filterPrefix);
   }
-  if (filterPrefix !== undefined && shapeContains !== undefined && !filterPrefix.prefix.includes(shapeContains) && !shapeContains.includes(filterPrefix.prefix)) {
-    return true;
+
+  // A string can start with one literal and go on to contain another, so a prefix (^foo) contradicts no unanchored
+  // literal (bar), and neither do two unanchored literals. Only an exact literal (^foo$) excludes what it lacks.
+  const shapeContains = extractContainsLiteral(shapePattern);
+  const filterContains = extractContainsLiteral(filterPattern);
+  if (shapePrefix?.anchoredEnd === true && filterContains !== undefined) {
+    return !shapePrefix.prefix.includes(filterContains);
+  }
+  if (filterPrefix?.anchoredEnd === true && shapeContains !== undefined) {
+    return !filterPrefix.prefix.includes(shapeContains);
   }
 
   return false;
+}
+
+/**
+ * Whether some string matches both start-anchored literal patterns: ^foo and ^fo are compatible, ^foo and ^bar are not,
+ * and an end-anchored ^foo$ only admits prefixes of "foo".
+ */
+function areAnchoredLiteralsCompatible(first: IAnchoredLiteralPrefix, second: IAnchoredLiteralPrefix): boolean {
+  if (first.anchoredEnd && second.anchoredEnd) {
+    return first.prefix === second.prefix;
+  }
+  if (first.anchoredEnd) {
+    return first.prefix.startsWith(second.prefix);
+  }
+  if (second.anchoredEnd) {
+    return second.prefix.startsWith(first.prefix);
+  }
+  return first.prefix.startsWith(second.prefix) || second.prefix.startsWith(first.prefix);
 }
 
 function extractAnchoredLiteralPrefix(pattern: string): IAnchoredLiteralPrefix | undefined {

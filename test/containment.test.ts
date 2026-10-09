@@ -447,6 +447,38 @@ describe('solveShapeQueryContainment', () => {
             expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
         });
 
+        it.each([
+            ['^fo', '^foo', '', ContainmentResult.CONTAINED],
+            ['^foo', 'bar', '', ContainmentResult.CONTAINED],
+            ['^foo', '^FOO', 'i', ContainmentResult.CONTAINED],
+            ['^foo$', 'oo', '', ContainmentResult.CONTAINED],
+            ['^foo$', 'bar', '', ContainmentResult.REJECTED],
+            ['^foo$', '^foobar', '', ContainmentResult.REJECTED],
+        ])('should reject sh:pattern "%s" against FILTER regex "%s" (flags "%s") only when no string matches both', async (shapePattern, filterPattern, flags, expected) => {
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:patternShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:nickname ;
+                    sh:datatype xsd:string ;
+                    sh:pattern "${shapePattern}"
+                ] .
+            `;
+            const shape = await shaclShapeFromQuads(n3Parser.parse(shacl), 'https://www.example.ca/patternShape') as IShape;
+            const query = generateQuery(toAlgebra(sparqlParser.parse(`
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?s ex:nickname ?nickname .
+              FILTER(regex(str(?nickname), "${filterPattern}", "${flags}"))
+            }`)));
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] }).result).toBe(expected);
+        });
+
         it('should support FILTER datatype(?v) comparison with VALUES', () => {
             const queryString = `
             PREFIX ex: <https://www.example.ca/>
@@ -1930,12 +1962,12 @@ describe('supported profile and explicit negation', () => {
 
     describe('discarded constructs', () => {
         it('should not let a MINUS block lower the result', async () => {
-            expect(await classify('SELECT * WHERE { ?s foaf:name ?n . MINUS { ?s ex:age ?a } }', closedNameShape))
+            expect(await classify('SELECT * WHERE { ?s foaf:name ?n . MINUS { ?s ex:age ?a . ?s ex:email ?e } }', closedNameShape))
                 .toBe(ContainmentResult.CONTAINED);
         });
 
         it('should not let a MINUS block raise the result', async () => {
-            expect(await classify('SELECT * WHERE { ?s ex:unknown ?x . MINUS { ?s foaf:name ?n } }', closedNameShape))
+            expect(await classify('SELECT * WHERE { ?s ex:unknown ?x . MINUS { ?s foaf:name ?n . ?s ex:email ?e } }', closedNameShape))
                 .toBe(ContainmentResult.REJECTED);
         });
 
@@ -1946,8 +1978,33 @@ describe('supported profile and explicit negation', () => {
 
         it('should record the discarded constructs on the query', () => {
             const query = generateQuery(toAlgebra(new SPARQLParser().parse(
-                `${P} SELECT * WHERE { ?s foaf:name ?n . MINUS { ?s ex:age ?a } }`)));
+                `${P} SELECT * WHERE { ?s foaf:name ?n . MINUS { ?s ex:age ?a . ?s ex:email ?e } }`)));
             expect(query.unsupported).toStrictEqual(['MINUS']);
+        });
+
+        it('should record a construct discarded inside a UNION branch on the query', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { { ?s foaf:name ?n . SERVICE <http://x.example/sp> { ?s ex:age ?a } } UNION { ?s ex:email ?e } }`)));
+            expect(query.unsupported).toStrictEqual(['SERVICE']);
+        });
+
+        it.each([
+            ['FILTER EXISTS { ?s ex:age ?a }', ['EXISTS']],
+            ['FILTER(?n = "a" || NOT EXISTS { ?s ex:age ?a })', ['NOT EXISTS']],
+            ['FILTER(!EXISTS { ?s ex:age ?a . ?s ex:email ?e })', ['NOT EXISTS']],
+            ['OPTIONAL { ?s ex:email ?e FILTER NOT EXISTS { ?s ex:age ?a } }', ['NOT EXISTS']],
+        ])('should record a discarded existence test in %s', (pattern, unsupported) => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { ?s foaf:name ?n . ${pattern} }`)));
+            expect(query.unsupported).toStrictEqual(unsupported);
+        });
+
+        it('should keep the decidable part of a FILTER that contains a discarded existence test', async () => {
+            const shape = `${SHAPE_PREFIXES} @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+                <http://example.org/S> a sh:NodeShape ;
+                    sh:property [ sh:path ex:age ; sh:datatype xsd:integer ; sh:minInclusive 0 ] .`;
+            expect(await classify('SELECT * WHERE { ?s ex:age ?a . FILTER(?a < 0 && NOT EXISTS { ?s ex:x ?y . ?s ex:z ?w }) }', shape))
+                .toBe(ContainmentResult.WEAKLY_REJECTED);
         });
 
         it('should throw when every triple pattern came from a discarded construct', () => {
@@ -1956,6 +2013,129 @@ describe('supported profile and explicit negation', () => {
             expect(query.starPatterns.size).toBe(0);
             expect(query.unsupported).toStrictEqual(['SERVICE']);
             expect(() => solveShapeQueryContainment({ query, shapes: [] })).toThrow(EmptyQueryError);
+        });
+    });
+
+    describe('negated triple patterns', () => {
+        const requiresPwShape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:property [ sh:path foaf:name ], [ sh:path ex:pw ; sh:minCount 1 ] .`;
+        const optionalPwShape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:property [ sh:path foaf:name ], [ sh:path ex:pw ] .`;
+        const forbidsPwShape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:property [ sh:path foaf:name ] ;
+                sh:not [ sh:path ex:pw ; sh:minCount 1 ] .`;
+
+        function normalize(pattern: string): IQuery {
+            return generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { ?s foaf:name ?n . ${pattern} }`)));
+        }
+
+        describe.each([
+            'FILTER NOT EXISTS { ?s ex:pw ?p }',
+            'FILTER(!EXISTS { ?s ex:pw ?p })',
+            'MINUS { ?s ex:pw ?p }',
+            'MINUS { ?s ex:pw [] }',
+        ])('%s', (pattern) => {
+            const query = `SELECT * WHERE { ?s foaf:name ?n . ${pattern} }`;
+
+            it('should become an excluded predicate of the star pattern of its subject', () => {
+                const normalized = normalize(pattern);
+                expect(normalized.starPatterns.get('s')!.excludedPredicates).toStrictEqual(new Set(['http://example.org/pw']));
+                expect(normalized.unsupported).toBeUndefined();
+                expect(normalized.filters).toBeUndefined();
+            });
+
+            it('should be rejected by a shape that requires the predicate, although the shape is open', async () => {
+                expect(await classify(query, requiresPwShape)).toBe(ContainmentResult.REJECTED);
+            });
+
+            it.each([
+                ['declares the predicate optional', optionalPwShape],
+                ['forbids the predicate', forbidsPwShape],
+                ['is closed without declaring the predicate', closedNameShape],
+            ])('should not prevent containment by a shape that %s', async (_, shape) => {
+                expect(await classify(query, shape)).toBe(ContainmentResult.CONTAINED);
+            });
+        });
+
+        it.each([
+            ['an object bound by the group', 'FILTER NOT EXISTS { ?s ex:pw ?n }', 'NOT EXISTS'],
+            ['a constant object', 'FILTER NOT EXISTS { ?s ex:pw ex:secret }', 'NOT EXISTS'],
+            ['a subject the group does not bind', 'FILTER NOT EXISTS { ?x ex:pw ?p }', 'NOT EXISTS'],
+            ['more than one triple pattern', 'FILTER NOT EXISTS { ?s ex:pw ?p . ?p ex:kind ?k }', 'NOT EXISTS'],
+            ['no variable shared with the left operand', 'MINUS { ?x ex:pw ?p }', 'MINUS'],
+            ['an OPTIONAL group as its scope', 'OPTIONAL { ?s ex:email ?e MINUS { ?s ex:pw ?p } }', 'MINUS'],
+        ])('should discard a negation with %s', async (_, pattern, construct) => {
+            const normalized = normalize(pattern);
+            expect(normalized.unsupported).toStrictEqual([construct]);
+            expect(normalized.starPatterns.get('s')!.excludedPredicates).toBeUndefined();
+            expect(await classify(`SELECT * WHERE { ?s foaf:name ?n . ${pattern} }`, requiresPwShape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should discard a negation whose subject is bound only by an OPTIONAL pattern', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { ?y foaf:name ?n . OPTIONAL { ?s ex:email ?e } FILTER NOT EXISTS { ?s ex:pw ?p } }`)));
+            expect(query.unsupported).toStrictEqual(['NOT EXISTS']);
+            expect(query.starPatterns.get('s')!.excludedPredicates).toBeUndefined();
+        });
+
+        describe('on a nested star pattern', () => {
+            const shapes = `${SHAPE_PREFIXES}
+                <http://example.org/PersonShape> a sh:NodeShape ;
+                    sh:property [ sh:path ex:address ; sh:node <http://example.org/AddressShape> ] .
+                <http://example.org/AddressShape> a sh:NodeShape ;
+                    sh:property [ sh:path ex:city ], [ sh:path ex:zip ; sh:minCount 1 ] .`;
+
+            async function report(rawQuery: string): Promise<ContainmentReport> {
+                const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
+                const quads = new N3.Parser().parse(shapes);
+                const person = await parseShaclShape(quads, 'http://example.org/PersonShape');
+                const address = await parseShaclShape(quads, 'http://example.org/AddressShape');
+                return solveShapeQueryContainment({ query, shapes: [person], dependentShapes: [address] });
+            }
+
+            it('should be contained without the negation', async () => {
+                expect((await report('SELECT * WHERE { ?p ex:address ?a . ?a ex:city ?c }')).result)
+                    .toBe(ContainmentResult.CONTAINED);
+            });
+
+            it('should refute the sh:node dependency when the referenced shape requires the predicate', async () => {
+                const result = await report('SELECT * WHERE { ?p ex:address ?a . ?a ex:city ?c . FILTER NOT EXISTS { ?a ex:zip ?z } }');
+                expect(result.starPatternsContainment.get('p')!.result).toBe(ContainmentResult.WEAKLY_REJECTED);
+                expect(result.starPatternsContainment.get('a')!.result).toBe(ContainmentResult.WEAKLY_REJECTED);
+                expect(result.result).toBe(ContainmentResult.WEAKLY_REJECTED);
+            });
+        });
+
+        describe('from a negative predicate of an input shape', () => {
+            const input = `${SHAPE_PREFIXES}
+                <http://example.org/In> a sh:NodeShape ;
+                    sh:property [ sh:path foaf:name ; sh:minCount 1 ] ;
+                    sh:not [ sh:path ex:pw ; sh:minCount 1 ] .`;
+
+            async function compare(rawTarget: string): Promise<ContainmentResult> {
+                const sourceShape = await parseShaclShape(new N3.Parser().parse(input), 'http://example.org/In');
+                const target = await parseShaclShape(new N3.Parser().parse(rawTarget), 'http://example.org/S');
+                return solveShapeShapeContainment({ sourceShape, targetShapes: [target] }).result;
+            }
+
+            it('should become an excluded predicate of the translated star pattern', async () => {
+                const sourceShape = await parseShaclShape(new N3.Parser().parse(input), 'http://example.org/In');
+                expect(shapeToQuery(sourceShape).starPatterns.get('http://example.org/In')!.excludedPredicates)
+                    .toStrictEqual(new Set(['http://example.org/pw']));
+            });
+
+            it('should be rejected by a target shape that requires the predicate', async () => {
+                expect(await compare(requiresPwShape)).toBe(ContainmentResult.REJECTED);
+            });
+
+            it('should be contained by a target shape that does not require the predicate', async () => {
+                expect(await compare(optionalPwShape)).toBe(ContainmentResult.CONTAINED);
+            });
         });
     });
 
