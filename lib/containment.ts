@@ -269,7 +269,7 @@ function findDisjunctContainment(starPatterns: IStarPatternWithDependencies[], g
   return haveContainment;
 }
 
-function getNestedMatchingTargets(starPattern: IStarPatternWithDependencies, classificationStats: Map<StarPatternName, IContainmentStats>, visited: Set<string> = new Set()): Set<string> {
+function getNestedMatchingTargets(starPattern: IStarPatternWithDependencies, classificationStats: Map<StarPatternName, IContainmentStats>, visited = new Set<string>()): Set<string> {
   // Include shapes that only become reachable through nested star-pattern dependencies.
   const nestedNames = getNestedDependencyNames(starPattern, visited);
   const nestedTargets = new Set<string>();

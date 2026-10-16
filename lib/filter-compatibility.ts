@@ -550,7 +550,7 @@ function intersectBounds(left: INumericBounds, right: INumericBounds): INumericB
 
 function mergeLowerBound(inclusive: number | undefined, inclusiveExclusive: boolean, exclusive: number | undefined, exclusiveExclusive: boolean): { value: number; exclusive: boolean } | undefined {
   // Pick the tighter lower bound from inclusive/exclusive candidates.
-  const candidates: Array<{ value: number; exclusive: boolean }> = [];
+  const candidates: { value: number; exclusive: boolean }[] = [];
   if (inclusive !== undefined) {
     candidates.push({ value: inclusive, exclusive: inclusiveExclusive });
   }
@@ -565,7 +565,7 @@ function mergeLowerBound(inclusive: number | undefined, inclusiveExclusive: bool
 
 function mergeUpperBound(inclusive: number | undefined, inclusiveExclusive: boolean, exclusive: number | undefined, exclusiveExclusive: boolean): { value: number; exclusive: boolean } | undefined {
   // Pick the tighter upper bound from inclusive/exclusive candidates.
-  const candidates: Array<{ value: number; exclusive: boolean }> = [];
+  const candidates: { value: number; exclusive: boolean }[] = [];
   if (inclusive !== undefined) {
     candidates.push({ value: inclusive, exclusive: inclusiveExclusive });
   }

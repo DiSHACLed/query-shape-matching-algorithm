@@ -3,7 +3,7 @@ import { toAlgebra } from '@traqula/algebra-sparql-1-1';
 import { describe, expect, it, test } from 'vitest';
 import { ConstraintType, IShape, Shape } from '../lib/Shape';
 import { IStarPatternWithDependencies, Triple } from '../lib/Triple';
-import { ContainmentResult, EmptyQueryError, IContainmentResult, IResult as ContainmentReport, StarPatternName, solveShapeQueryContainment, solveShapeShapeContainment } from '../lib/containment';
+import { ContainmentResult, EmptyQueryError, IContainmentResult, IResult, StarPatternName, solveShapeQueryContainment, solveShapeShapeContainment } from '../lib/containment';
 import { DataFactory } from 'rdf-data-factory';
 import { BaseQuad } from '@rdfjs/types';
 import { IQuery, generateQuery } from '../lib/query';
@@ -19,7 +19,6 @@ import { shaclShapeFromQuads } from '../lib/shacl';
 const DF = new DataFactory<BaseQuad>();
 const n3Parser = new N3.Parser();
 const sparqlParser = new SPARQLParser();
-type IResult = Omit<ContainmentReport, 'result'>;
 
 async function parseShaclShape(quads: RDF.Quad[], name: string): Promise<IShape> {
     const parsed = await shaclShapeFromQuads(quads, name);
@@ -2111,7 +2110,7 @@ describe('supported profile and explicit negation', () => {
                 <http://example.org/AddressShape> a sh:NodeShape ;
                     sh:property [ sh:path ex:city ], [ sh:path ex:zip ; sh:minCount 1 ] .`;
 
-            async function report(rawQuery: string): Promise<ContainmentReport> {
+            async function report(rawQuery: string): Promise<IResult> {
                 const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
                 const quads = new N3.Parser().parse(shapes);
                 const person = await parseShaclShape(quads, 'http://example.org/PersonShape');
@@ -2163,7 +2162,7 @@ describe('supported profile and explicit negation', () => {
     describe('queries that ask for every triple', () => {
         // `?s ?p ?o` is maximally unselective rather than unanswerable: it asks for every triple of
         // the resource, so any resource is relevant and the honest result is CONTAINED.
-        async function report(rawQuery: string) {
+        async function report(rawQuery: string): Promise<{ query: IQuery; result: IResult }> {
             const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
             const candidate = await parseShaclShape(new N3.Parser().parse(closedNameShape), 'http://example.org/S');
             return { query, result: solveShapeQueryContainment({ query, shapes: [candidate] }) };
@@ -2322,7 +2321,7 @@ describe('nested dependencies and partial matches', () => {
     // ex:PersonShape is closed and declares foaf:knows, constrained by sh:node ex:FriendShape.
     // Whether the nested pattern is refuted depends on ex:FriendShape: closed, it forbids anything
     // it does not declare; open, it is merely silent.
-    const shapesTtl = (friendClosed: boolean) => `
+    const shapesTtl = (friendClosed: boolean): string => `
         @prefix sh: <http://www.w3.org/ns/shacl#> .
         @prefix foaf: <http://xmlns.com/foaf/0.1/> .
         @prefix ex: <http://example.org/> .
@@ -2338,7 +2337,11 @@ describe('nested dependencies and partial matches', () => {
     const NOT_DECLARED = 'SELECT * WHERE { ?p foaf:knows ?f . ?f foaf:mbox ?m }';
     const DECLARED = 'SELECT * WHERE { ?p foaf:knows ?f . ?f foaf:name ?n }';
 
-    async function classify(rawQuery: string, friendClosed: boolean, asDependency: boolean) {
+    async function classify(
+        rawQuery: string,
+        friendClosed: boolean,
+        asDependency: boolean,
+    ): Promise<{ root: ContainmentResult; nested: ContainmentResult; aggregate: ContainmentResult }> {
         const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${PREFIXES} ${rawQuery}`)));
         const quads = new N3.Parser().parse(shapesTtl(friendClosed));
         const person = await parseShaclShape(quads, 'http://example.org/PersonShape');
@@ -2463,7 +2466,7 @@ describe('role filtering with decidingShapes', () => {
         return shapes;
     }
 
-    async function solve(userShape: string, placement: 'deciding' | 'unfiltered' | 'dependent' | 'dropped'): Promise<ContainmentReport> {
+    async function solve(userShape: string, placement: 'deciding' | 'unfiltered' | 'dependent' | 'dropped'): Promise<IResult> {
         const [response, request, address] = await parseShapes(serviceTtl, SERVICE_SHAPES);
         const userShapes = await parseShapes(userTtl, USER_SHAPES);
         const sourceShape = userShapes.find(shape => shape.name === userShape)!;
@@ -2480,7 +2483,7 @@ describe('role filtering with decidingShapes', () => {
         }
     }
 
-    function summarize(report: ContainmentReport): { aggregate: ContainmentResult; starPatterns: Map<StarPatternName, ContainmentResult>; visit: Map<string, boolean> } {
+    function summarize(report: IResult): { aggregate: ContainmentResult; starPatterns: Map<StarPatternName, ContainmentResult>; visit: Map<string, boolean> } {
         return {
             aggregate: report.result,
             starPatterns: new Map(Array.from(report.starPatternsContainment, ([name, { result }]) => [name, result])),

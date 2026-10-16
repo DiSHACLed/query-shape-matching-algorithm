@@ -4,17 +4,13 @@ import { createUriAndTermNamespace } from '@treecg/types';
 type TermVocabulary<T extends string> = {
   namespace: NamedNode<string>;
   custom: (input: string) => NamedNode<string>;
-} & {
-  [K in T]: NamedNode<string>;
-};
+} & Record<T, NamedNode<string>>;
 
 type Vocabulary<T extends string> = {
   namespace: string;
   custom: (input: string) => string;
   terms: TermVocabulary<T>;
-} & {
-  [K in T]: string;
-};
+} & Record<T, string>;
 
 function createVocabulary<T extends string>(
   baseUri: string,

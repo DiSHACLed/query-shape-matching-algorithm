@@ -26,7 +26,6 @@ describe('query', () => {
         const x = resp.starPatterns.get('x')!.starPattern;
         expect(x).toBeDefined();
         const element = x.get('http://exemple.ca')!;
-        element.triple
         expect(element.triple.predicate).toBe('http://exemple.ca');
         expect((element.triple.object as any).termType).toBe('Variable');
         expect((element.triple.object as any).value).toBe('z');

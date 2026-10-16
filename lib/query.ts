@@ -611,14 +611,14 @@ namespace QueryHandler {
     object: Term,
     optional?: boolean): void {
     const predicates = element.input;
-    let currentObject: Term = DF.blankNode(`${(<Algebra.Link>predicates[0]).iri.value}_${subject.value}`);
+    let currentObject: Term = DF.blankNode(`${(predicates[0] as Algebra.Link).iri.value}_${subject.value}`);
 
     for (let i = 0; i < predicates.length; i++) {
       const path = predicates[i];
       const currentSubject: Term = i === 0 ? subject : currentObject;
 
       currentObject = i === predicates.length - 1 ?
-        object : DF.blankNode(`${(<Algebra.Link>predicates[0]).iri.value}_${subject.value}`);
+        object : DF.blankNode(`${(predicates[0] as Algebra.Link).iri.value}_${subject.value}`);
 
       if (path.type === Algebra.Types.LINK) {
         handleLink(path, state.triples, currentSubject, currentObject, undefined, optional);
