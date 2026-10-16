@@ -1,5 +1,5 @@
 import type { Term } from '@rdfjs/types';
-import type { Algebra } from '@traqula/algebra-transformations-1-1';
+import { type Algebra, AlgebraFactory } from '@traqula/algebra-transformations-1-1';
 import { DataFactory } from 'rdf-data-factory';
 import { type ITripleWithDependencies, Triple, type IStarPatternWithDependencies, type ITriple } from './Triple';
 import { ConstraintType, type IPredicate, type IShape } from './Shape';
@@ -8,6 +8,7 @@ import { focusNodes, type ITargetAlternative } from './target';
 import type { IQuery, UnsupportedConstruct } from './query';
 
 const DF = new DataFactory();
+const AF = new AlgebraFactory();
 
 export interface IShapeToQueryOptions {
   linkedShapes?: IShape[] | Map<string, IShape>;
@@ -375,9 +376,9 @@ function addDatatypeFiltersFromConstraint(
   }
 
   const datatypeFilters = Array.from(constraint.value).map((datatypeIri) =>
-    operatorExpression('=', [
-      operatorExpression('datatype', [termExpression(object)]),
-      termExpression(DF.namedNode(datatypeIri)),
+    AF.createOperatorExpression('=', [
+      AF.createOperatorExpression('datatype', [AF.createTermExpression(object)]),
+      AF.createTermExpression(DF.namedNode(datatypeIri)),
     ]),
   );
 
@@ -388,39 +389,39 @@ function addDatatypeFiltersFromConstraint(
   }
 
   if (constraint.minInclusive !== undefined) {
-    collector.push(operatorExpression('>=', [
-      termExpression(object),
-      termExpression(numberLiteral(constraint.minInclusive)),
+    collector.push(AF.createOperatorExpression('>=', [
+      AF.createTermExpression(object),
+      AF.createTermExpression(numberLiteral(constraint.minInclusive)),
     ]));
   }
   if (constraint.maxInclusive !== undefined) {
-    collector.push(operatorExpression('<=', [
-      termExpression(object),
-      termExpression(numberLiteral(constraint.maxInclusive)),
+    collector.push(AF.createOperatorExpression('<=', [
+      AF.createTermExpression(object),
+      AF.createTermExpression(numberLiteral(constraint.maxInclusive)),
     ]));
   }
   if (constraint.minExclusive !== undefined) {
-    collector.push(operatorExpression('>', [
-      termExpression(object),
-      termExpression(numberLiteral(constraint.minExclusive)),
+    collector.push(AF.createOperatorExpression('>', [
+      AF.createTermExpression(object),
+      AF.createTermExpression(numberLiteral(constraint.minExclusive)),
     ]));
   }
   if (constraint.maxExclusive !== undefined) {
-    collector.push(operatorExpression('<', [
-      termExpression(object),
-      termExpression(numberLiteral(constraint.maxExclusive)),
+    collector.push(AF.createOperatorExpression('<', [
+      AF.createTermExpression(object),
+      AF.createTermExpression(numberLiteral(constraint.maxExclusive)),
     ]));
   }
 
   if (constraint.pattern !== undefined) {
     const regexArgs: Algebra.Expression[] = [
-      operatorExpression('str', [termExpression(object)]),
-      termExpression(DF.literal(constraint.pattern)),
+      AF.createOperatorExpression('str', [AF.createTermExpression(object)]),
+      AF.createTermExpression(DF.literal(constraint.pattern)),
     ];
     if (constraint.flags !== undefined) {
-      regexArgs.push(termExpression(DF.literal(constraint.flags)));
+      regexArgs.push(AF.createTermExpression(DF.literal(constraint.flags)));
     }
-    collector.push(operatorExpression('regex', regexArgs));
+    collector.push(AF.createOperatorExpression('regex', regexArgs));
   }
 }
 
@@ -430,7 +431,7 @@ function addDatatypeFiltersFromConstraint(
 function reduceOrExpressions(expressions: Algebra.Expression[]): Algebra.Expression {
   let current = expressions[0];
   for (let i = 1; i < expressions.length; i++) {
-    current = operatorExpression('||', [current, expressions[i]]);
+    current = AF.createOperatorExpression('||', [current, expressions[i]]);
   }
   return current;
 }
@@ -440,25 +441,4 @@ function reduceOrExpressions(expressions: Algebra.Expression[]): Algebra.Express
  */
 function numberLiteral(value: number): Term {
   return DF.literal(String(value), DF.namedNode(XSD.decimal));
-}
-
-/**
- * Wrap an RDF term in the algebra expression shape expected by filter constructors.
- */
-function termExpression(term: Term): Algebra.Expression {
-  return {
-    subType: 'term',
-    term,
-  } as unknown as Algebra.Expression;
-}
-
-/**
- * Construct a generic operator expression node for the algebra filter representation.
- */
-function operatorExpression(operator: string, args: Algebra.Expression[]): Algebra.Expression {
-  return {
-    subType: 'operator',
-    operator,
-    args,
-  } as unknown as Algebra.Expression;
 }
