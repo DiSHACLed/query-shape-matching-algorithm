@@ -5,9 +5,11 @@ import type {
   ShapeError,
   OneOf,
   IShape,
-  IPredicate
+  IPredicate,
+  IConstraint,
+  IConstraintFacets,
 } from './Shape';
-import { PoorlyFormatedShapeError, walkRdfList, buildShapeFromRaw, predicateToParts, buildConstraint, isNegativeCardinality } from './Shape';
+import { PoorlyFormatedShapeError, walkRdfList, tryCreateShape, buildConstraint, isNegativeCardinality } from './Shape';
 import { addDiagnostic, getPolicy, type IShapeParserOptions } from './parser-policy';
 
 const DF = new DataFactory();
@@ -110,17 +112,7 @@ function concatShapeInfo(
   const positivePredicates: IPredicate[] = [];
   const negativePredicates: string[] = [];
   const argsFunctionPredicate: IAppendPredicateArgs = {
-    mapIdPredicate: mapTripleShex.mapIdPredicate,
-    mapIriCardinalityMin: mapTripleShex.mapIriCardinalityMin,
-    mapIriCardinalityMax: mapTripleShex.mapIriCardinalityMax,
-    mapIriConstraint: mapTripleShex.mapIriConstraint,
-    mapIriDatatype: mapTripleShex.mapIriDatatype,
-    mapIriMinInclusive: mapTripleShex.mapIriMinInclusive,
-    mapIriMaxInclusive: mapTripleShex.mapIriMaxInclusive,
-    mapIriMinExclusive: mapTripleShex.mapIriMinExclusive,
-    mapIriMaxExclusive: mapTripleShex.mapIriMaxExclusive,
-    mapIriPattern: mapTripleShex.mapIriPattern,
-    mapIriFlags: mapTripleShex.mapIriFlags,
+    map: mapTripleShex,
     positivePredicates,
     negativePredicates,
     oneOf: new Map(),
@@ -143,8 +135,8 @@ function concatShapeInfo(
   }
   // If there is only one expression
   if (expressions === undefined) {
-    argsFunctionPredicate.current = expression;
-    const predicateAdded = appendPredicates((argsFunctionPredicate as Required<IAppendPredicateArgs>));
+    // an undefined expression without expressions has already returned an error above
+    const predicateAdded = expression !== undefined && appendPredicates(argsFunctionPredicate, expression);
     if (!predicateAdded) {
       return new PoorlyFormatedShapeError('there are no predicates in the shape');
     }
@@ -218,32 +210,27 @@ function concatShapeInfo(
       oneOfs.push(oneOf);
     }
     oneOfs = deleteIdenticalBranch(oneOfs)
-    return buildShapeFromRaw({
+    return tryCreateShape({
       name: shapeIri,
-      positivePredicates: positivePredicates.map(predicateToParts),
+      positivePredicates,
       negativePredicates,
       closed: isClosed,
-      oneOf: oneOfs.map(currentOneOf => currentOneOf.map(path => path.map(predicateToParts))),
+      oneOf: oneOfs,
     });
 }
 
 /**
  * Interpret an RDF term of a constraint into an object
  * @param {RDF.Term | undefined} constraint - The constraint RDF term
- * @param {Map<string, string>} mapIriDatatype - A map of IRI and data type
+ * @param {IMapTripleShex} map - The ShEx shape information, for the datatype and facets of a node constraint
+ * @param {string} predicate - The predicate the constraint applies to
  * @returns {IConstraint | undefined} - The constraint or undefined if the constraint is not supported
  */
 function interpretConstraint(
   constraint: RDF.Term | undefined,
-  mapIriDatatype: Map<string, string>,
-  mapIriMinInclusive: Map<string, number>,
-  mapIriMaxInclusive: Map<string, number>,
-  mapIriMinExclusive: Map<string, number>,
-  mapIriMaxExclusive: Map<string, number>,
-  mapIriPattern: Map<string, string>,
-  mapIriFlags: Map<string, string>,
-  predicate?: string,
-){
+  map: IMapTripleShex,
+  predicate: string,
+): IConstraint | undefined {
   if (constraint === undefined) {
     return undefined;
   }
@@ -253,24 +240,9 @@ function interpretConstraint(
   }
 
   if (constraint.termType === 'BlankNode') {
-    const dataType = mapIriDatatype.get(constraint.value);
-    if (dataType !== undefined) {
-      const minInclusive = mapIriMinInclusive.get(constraint.value);
-      const maxInclusive = mapIriMaxInclusive.get(constraint.value);
-      const minExclusive = mapIriMinExclusive.get(constraint.value);
-      const maxExclusive = mapIriMaxExclusive.get(constraint.value);
-      const pattern = mapIriPattern.get(constraint.value);
-      const flags = mapIriFlags.get(constraint.value);
-
-      return buildConstraint({
-        datatypeConstraint: dataType,
-        minInclusive,
-        maxInclusive,
-        minExclusive,
-        maxExclusive,
-        pattern,
-        flags,
-      }, predicate);
+    const datatypeConstraint = map.mapIriDatatype.get(constraint.value);
+    if (datatypeConstraint !== undefined) {
+      return buildConstraint({ datatypeConstraint, ...map.mapIriFacets.get(constraint.value) }, predicate);
     }
   }
 
@@ -278,32 +250,23 @@ function interpretConstraint(
 }
 
 /**
- * Add the predicate to the predicat lists
- * @param {Required<IAppendPredicateArgs>} args - Argument to build a predicate
+ * Add the predicate of a triple expression to the predicate lists
+ * @param {IAppendPredicateArgs} args - The lists to add to, and the shape information
+ * @param {string} current - The triple expression
  * @returns {boolean} - return true if the predicate was added
  */
 function appendPredicates(
-  args: Required<IAppendPredicateArgs>,
+  args: IAppendPredicateArgs,
+  current: string,
 ): boolean {
-  const predicate = args.mapIdPredicate.get(args.current);
+  const predicate = args.map.mapIdPredicate.get(current);
   if (predicate !== undefined) {
-    const min = args.mapIriCardinalityMin.get(args.current);
-    const max = args.mapIriCardinalityMax.get(args.current);
+    const min = args.map.mapIriCardinalityMin.get(current);
+    const max = args.map.mapIriCardinalityMax.get(current);
     if (isNegativeCardinality(min, max)) {
       args.negativePredicates.push(predicate);
     } else {
-      const constraintIri = args.mapIriConstraint.get(args.current);
-      const constraint = interpretConstraint(
-        constraintIri,
-        args.mapIriDatatype,
-        args.mapIriMinInclusive,
-        args.mapIriMaxInclusive,
-        args.mapIriMinExclusive,
-        args.mapIriMaxExclusive,
-        args.mapIriPattern,
-        args.mapIriFlags,
-        predicate,
-      );
+      const constraint = interpretConstraint(args.map.mapIriConstraint.get(current), args.map, predicate);
       args.positivePredicates.push({
         name: predicate,
         cardinality: {
@@ -330,17 +293,7 @@ function handleOneOf(
   const positivePredicates: IPredicate[] = [];
   const negativePredicates: string[] = [];
   const argsFunctionPredicate: IAppendPredicateArgs = {
-    mapIdPredicate: mapTripleShex.mapIdPredicate,
-    mapIriCardinalityMin: mapTripleShex.mapIriCardinalityMin,
-    mapIriCardinalityMax: mapTripleShex.mapIriCardinalityMax,
-    mapIriConstraint: mapTripleShex.mapIriConstraint,
-    mapIriDatatype: mapTripleShex.mapIriDatatype,
-    mapIriMinInclusive: mapTripleShex.mapIriMinInclusive,
-    mapIriMaxInclusive: mapTripleShex.mapIriMaxInclusive,
-    mapIriMinExclusive: mapTripleShex.mapIriMinExclusive,
-    mapIriMaxExclusive: mapTripleShex.mapIriMaxExclusive,
-    mapIriPattern: mapTripleShex.mapIriPattern,
-    mapIriFlags: mapTripleShex.mapIriFlags,
+    map: mapTripleShex,
     positivePredicates,
     negativePredicates,
     oneOf: new Map()
@@ -433,8 +386,7 @@ function handleEachOf(
   // Traverse the RDF list
   while (current !== undefined) {
     if (!mapTripleShex.setIriOneOf.has(current)) {
-      argsFunctionPredicate.current = current;
-      appendPredicates((argsFunctionPredicate as Required<IAppendPredicateArgs>));
+      appendPredicates(argsFunctionPredicate, current);
     } else {
       const error = handleOneOf(
         current,
@@ -529,23 +481,15 @@ function parseShapeQuads(
   if (quad.predicate.equals(SHEX.terms.datatype)) {
     mapTripleShex.mapIriDatatype.set(quad.subject.value, quad.object.value);
   }
-  if (quad.predicate.equals(SHEX.terms.mininclusive)) {
-    mapTripleShex.mapIriMinInclusive.set(quad.subject.value, Number(quad.object.value));
-  }
-  if (quad.predicate.equals(SHEX.terms.maxinclusive)) {
-    mapTripleShex.mapIriMaxInclusive.set(quad.subject.value, Number(quad.object.value));
-  }
-  if (quad.predicate.equals(SHEX.terms.minexclusive)) {
-    mapTripleShex.mapIriMinExclusive.set(quad.subject.value, Number(quad.object.value));
-  }
-  if (quad.predicate.equals(SHEX.terms.maxexclusive)) {
-    mapTripleShex.mapIriMaxExclusive.set(quad.subject.value, Number(quad.object.value));
+  const numericFacet = NUMERIC_FACETS.get(quad.predicate.value);
+  if (numericFacet !== undefined) {
+    getOrCreateFacets(mapTripleShex, quad.subject.value)[numericFacet] = Number(quad.object.value);
   }
   if (quad.predicate.equals(SHEX.terms.pattern)) {
-    mapTripleShex.mapIriPattern.set(quad.subject.value, quad.object.value);
+    getOrCreateFacets(mapTripleShex, quad.subject.value).pattern = quad.object.value;
   }
   if (quad.predicate.equals(SHEX.terms.flags)) {
-    mapTripleShex.mapIriFlags.set(quad.subject.value, quad.object.value);
+    getOrCreateFacets(mapTripleShex, quad.subject.value).flags = quad.object.value;
   }
   if (quad.object.equals(SHEX.terms.EachOf)) {
     mapTripleShex.setIriEachOf.add(quad.subject.value);
@@ -553,6 +497,23 @@ function parseShapeQuads(
   if (quad.object.equals(SHEX.terms.OneOf)) {
     mapTripleShex.setIriOneOf.add(quad.subject.value);
   }
+}
+
+// The ShEx numeric facets, by the facet they set
+const NUMERIC_FACETS = new Map<string, 'minInclusive' | 'maxInclusive' | 'minExclusive' | 'maxExclusive'>([
+  [SHEX.mininclusive, 'minInclusive'],
+  [SHEX.maxinclusive, 'maxInclusive'],
+  [SHEX.minexclusive, 'minExclusive'],
+  [SHEX.maxexclusive, 'maxExclusive'],
+]);
+
+function getOrCreateFacets(mapTripleShex: IMapTripleShex, nodeId: string): IConstraintFacets {
+  let facets = mapTripleShex.mapIriFacets.get(nodeId);
+  if (facets === undefined) {
+    facets = {};
+    mapTripleShex.mapIriFacets.set(nodeId, facets);
+  }
+  return facets;
 }
 
 interface IMapTripleShex {
@@ -567,32 +528,16 @@ interface IMapTripleShex {
   mapIriCardinalityMin: Map<string, number>;
   mapIriConstraint: Map<string, RDF.Term>;
   mapIriDatatype: Map<string, string>;
-  mapIriMinInclusive: Map<string, number>;
-  mapIriMaxInclusive: Map<string, number>;
-  mapIriMinExclusive: Map<string, number>;
-  mapIriMaxExclusive: Map<string, number>;
-  mapIriPattern: Map<string, string>;
-  mapIriFlags: Map<string, string>;
+  mapIriFacets: Map<string, IConstraintFacets>;
   setIriEachOf: Set<string>;
   setIriOneOf: Set<string>;
 }
 
 interface IAppendPredicateArgs {
-  mapIdPredicate: Map<string, string>;
-  mapIriCardinalityMin: Map<string, number>;
-  mapIriCardinalityMax: Map<string, number>;
-  mapIriConstraint: Map<string, RDF.Term>;
-  mapIriDatatype: Map<string, string>;
-  mapIriMinInclusive: Map<string, number>;
-  mapIriMaxInclusive: Map<string, number>;
-  mapIriMinExclusive: Map<string, number>;
-  mapIriMaxExclusive: Map<string, number>;
-  mapIriPattern: Map<string, string>;
-  mapIriFlags: Map<string, string>;
+  map: IMapTripleShex;
   positivePredicates: IPredicate[];
   negativePredicates: string[];
   oneOf: Map<string, OneOf>;
-  current?: string;
 }
 
 function defaultMapTripleShex(): IMapTripleShex {
@@ -608,12 +553,7 @@ function defaultMapTripleShex(): IMapTripleShex {
     mapIriCardinalityMin: new Map(),
     mapIriConstraint: new Map(),
     mapIriDatatype: new Map(),
-    mapIriMinInclusive: new Map(),
-    mapIriMaxInclusive: new Map(),
-    mapIriMinExclusive: new Map(),
-    mapIriMaxExclusive: new Map(),
-    mapIriPattern: new Map(),
-    mapIriFlags: new Map(),
+    mapIriFacets: new Map(),
     setIriEachOf: new Set(),
     setIriOneOf: new Set()
   };

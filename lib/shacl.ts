@@ -1,14 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { DataFactory } from 'rdf-data-factory';
-import type { OneOf, IShape, IPredicate } from './Shape';
-import { 
-    PoorlyFormatedShapeError, 
-    walkRdfList, 
-    buildShapeFromRaw, 
-    predicateToParts, 
-    buildPredicate as buildSharedPredicate, 
-    isNegativeCardinality 
-} from './Shape';
+import type { OneOf, IShape, IPredicate, IConstraintDeclaration } from './Shape';
+import { PoorlyFormatedShapeError, walkRdfList, buildConstraint, tryCreateShape, isNegativeCardinality } from './Shape';
 import type { ShapeError, IShapeTargets } from './Shape';
 import { SHACL, RDF as RDF_VOCAB, RDFS, XSD } from './constant';
 import { addDiagnostic, getPolicy, type IShapeParserOptions } from './parser-policy';
@@ -21,21 +14,12 @@ const RDF_TRUE = DF.literal('true', DF.namedNode(XSD.boolean));
 /**
  * Raw quad data collected for a single SHACL property shape (blank node).
  */
-interface IPropertyShapeData {
+interface IPropertyShapeData extends IConstraintDeclaration {
     path?: string;
     /** false when sh:path is a blank node, that is, a complex path */
     pathIsIri?: boolean;
     minCount?: number;
     maxCount?: number;
-    minInclusive?: number;
-    maxInclusive?: number;
-    minExclusive?: number;
-    maxExclusive?: number;
-    pattern?: string;
-    flags?: string;
-    classConstraint?: string; // sh:class value
-    datatypeConstraint?: string; // sh:datatype value
-    nodeConstraint?: string; // sh:node value
     /** true when this property shape appears under sh:not */
     isNegated: boolean;
 }
@@ -226,13 +210,13 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
         return;
     }
 
-    // sh:class  → SHAPE constraint
+    // sh:class  → CLASS constraint
     if (quad.predicate.equals(SHACL.terms.class)) {
         getOrCreatePropData(map, s).classConstraint = o;
         return;
     }
 
-    // sh:datatype  → TYPE constraint
+    // sh:datatype  → DATATYPE constraint
     if (quad.predicate.equals(SHACL.terms.datatype)) {
         getOrCreatePropData(map, s).datatypeConstraint = o;
         return;
@@ -240,7 +224,7 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
 
     // sh:node  → SHAPE constraint (reference to another shape)
     if (quad.predicate.equals(SHACL.terms.node)) {
-        getOrCreatePropData(map, s).nodeConstraint = o;
+        getOrCreatePropData(map, s).shapeConstraint = o;
         return;
     }
 
@@ -378,7 +362,7 @@ function buildShape(
         if (isNeg) {
             negativePredicates.push(data.path);
         } else {
-            positivePredicates.push(buildPredicate(data));
+            positivePredicates.push(buildPredicate(data.path, data));
         }
     }
 
@@ -413,12 +397,12 @@ function buildShape(
         ? []
         : walkRdfList(ignoredHead, { firstByNode: map.listFirst, restByNode: map.listRest }).values;
 
-    return buildShapeFromRaw({
+    return tryCreateShape({
         name: shapeIri,
-        positivePredicates: positivePredicates.map(predicate => predicateToParts(predicate)),
+        positivePredicates,
         negativePredicates,
         closed,
-        oneOf: oneOfs.map(currentOneOf => currentOneOf.map(path => path.map(predicateToParts))),
+        oneOf: oneOfs,
         targets,
         ignoredProperties,
     });
@@ -496,24 +480,16 @@ function isNegatedData(data: IPropertyShapeData): boolean {
     return isNegativeCardinality(data.minCount ?? SHACL_DEFAULT_MIN_COUNT, data.maxCount);
 }
 
-/** Build an IPredicate from a property shape data entry. */
-function buildPredicate(data: IPropertyShapeData): IPredicate {
-    return buildSharedPredicate({
-        name: data.path!,
-        minCount: data.minCount ?? SHACL_DEFAULT_MIN_COUNT,
-        maxCount: data.maxCount ?? SHACL_DEFAULT_MAX_COUNT,
-        constraintParts: {
-            classConstraint: data.classConstraint,
-            shapeConstraint: data.nodeConstraint,
-            datatypeConstraint: data.datatypeConstraint,
-            minInclusive: data.minInclusive,
-            maxInclusive: data.maxInclusive,
-            minExclusive: data.minExclusive,
-            maxExclusive: data.maxExclusive,
-            pattern: data.pattern,
-            flags: data.flags,
+/** Build an IPredicate from a property shape data entry with the given path. */
+function buildPredicate(path: string, data: IPropertyShapeData): IPredicate {
+    return {
+        name: path,
+        constraint: buildConstraint(data, path),
+        cardinality: {
+            min: data.minCount ?? SHACL_DEFAULT_MIN_COUNT,
+            max: data.maxCount ?? SHACL_DEFAULT_MAX_COUNT,
         },
-    });
+    };
 }
 
 /**
@@ -568,14 +544,14 @@ function resolveOrMember(memberId: string, map: IMapTripleShacl): IPredicate[] {
         for (const propId of propIds) {
             const data = map.propertyData.get(propId);
             if (data?.path !== undefined && !isNegatedData(data)) {
-                predicates.push(buildPredicate(data));
+                predicates.push(buildPredicate(data.path, data));
             }
         }
     }
     // A member might itself be a single property shape (sh:path lives directly on the member)
     const directData = map.propertyData.get(memberId);
     if (directData?.path !== undefined && predicates.length === 0) {
-        predicates.push(buildPredicate(directData));
+        predicates.push(buildPredicate(directData.path, directData));
     }
     return predicates;
 }

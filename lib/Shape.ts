@@ -58,17 +58,32 @@ export type IPredicateJson = Omit<IPredicate, "constraint"> & {
 }
 
 /**
- * A constraint
+ * The numeric and string facets that restrict the literal values of a datatype constraint
  */
-export interface IConstraint {
-  value: Set<string>;
-  type: ConstraintType;
+export interface IConstraintFacets {
   minInclusive?: number;
   maxInclusive?: number;
   minExclusive?: number;
   maxExclusive?: number;
   pattern?: string;
   flags?: string;
+}
+
+const FACET_KEYS: (keyof IConstraintFacets)[] = [
+  'minInclusive',
+  'maxInclusive',
+  'minExclusive',
+  'maxExclusive',
+  'pattern',
+  'flags',
+];
+
+/**
+ * A constraint
+ */
+export interface IConstraint extends IConstraintFacets {
+  value: Set<string>;
+  type: ConstraintType;
 }
 
 function toJsonConstraint(constraint: IConstraint): IConstraintJson {
@@ -448,165 +463,62 @@ export function walkRdfList(
   };
 }
 
-export interface IConstraintParts {
-  shapeConstraint?: string;
+/**
+ * What a shapes graph declares about the values of a property: a class, a shape or a datatype, and
+ * the facets of the datatype.
+ */
+export interface IConstraintDeclaration extends IConstraintFacets {
   classConstraint?: string;
+  shapeConstraint?: string;
   datatypeConstraint?: string;
-  minInclusive?: number;
-  maxInclusive?: number;
-  minExclusive?: number;
-  maxExclusive?: number;
-  pattern?: string;
-  flags?: string;
 }
-
-export interface IPredicateParts {
-  name: string;
-  minCount?: number;
-  maxCount?: number;
-  constraintParts?: IConstraintParts;
-}
-
-export interface IRawShape {
-  name: string;
-  closed?: boolean;
-  positivePredicates: IPredicateParts[];
-  negativePredicates?: string[];
-  oneOf?: IRawOneOf[];
-  targets?: Partial<IShapeTargets>;
-  ignoredProperties?: string[];
-}
-
-export type IRawOneOfPath = IPredicateParts[];
-export type IRawOneOf = IRawOneOfPath[];
 
 /**
- * Shared parser-neutral assembly from raw parser data into IShape.
+ * Build the constraint of a property from its declaration. A class takes precedence over a shape,
+ * and a shape over a datatype. A datatype on rdf:type names a class.
  */
-export function buildShapeFromRaw(raw: IRawShape): IShape | ShapeError {
+export function buildConstraint(declaration: IConstraintDeclaration, predicateName: string): IConstraint | undefined {
+  if (declaration.classConstraint !== undefined) {
+    return { value: new Set([declaration.classConstraint]), type: ConstraintType.CLASS };
+  }
+  if (declaration.shapeConstraint !== undefined) {
+    return { value: new Set([declaration.shapeConstraint]), type: ConstraintType.SHAPE };
+  }
+  if (declaration.datatypeConstraint === undefined) {
+    return undefined;
+  }
+  if (predicateName === RDF.type) {
+    return { value: new Set([declaration.datatypeConstraint]), type: ConstraintType.CLASS };
+  }
+  return { value: new Set([declaration.datatypeConstraint]), type: ConstraintType.DATATYPE, ...definedFacets(declaration) };
+}
+
+function definedFacets(facets: IConstraintFacets): IConstraintFacets {
+  const defined: IConstraintFacets = {};
+  for (const key of FACET_KEYS) {
+    if (facets[key] !== undefined) {
+      Object.assign(defined, { [key]: facets[key] });
+    }
+  }
+  return defined;
+}
+
+/**
+ * Build a shape, returning the error instead of throwing it when the shape is inconsistent.
+ */
+export function tryCreateShape(args: IShapeArgs): IShape | ShapeError {
   try {
-    const positivePredicates = raw.positivePredicates.map(buildPredicate);
-    const oneOf: OneOf[] = (raw.oneOf ?? []).map(currentOneOf =>
-      currentOneOf.map(path => path.map(buildPredicate)),
-    );
-
-    return new Shape({
-      name: raw.name,
-      positivePredicates,
-      negativePredicates: raw.negativePredicates ?? [],
-      closed: raw.closed ?? false,
-      oneOf,
-      targets: raw.targets,
-      ignoredProperties: raw.ignoredProperties,
-    });
+    return new Shape(args);
   } catch (error: unknown) {
-    return error as ShapeError;
+    if (error instanceof InconsistentPositiveAndNegativePredicateError) {
+      return error;
+    }
+    throw error;
   }
-}
-
-export function predicateToParts(predicate: IPredicate): IPredicateParts {
-  return {
-    name: predicate.name,
-    minCount: predicate.cardinality?.min,
-    maxCount: predicate.cardinality?.max,
-    constraintParts: constraintToParts(predicate.constraint),
-  };
-}
-
-export function buildPredicate(parts: IPredicateParts): IPredicate {
-  const hasCardinality = parts.minCount !== undefined || parts.maxCount !== undefined;
-  return {
-    name: parts.name,
-    constraint: parts.constraintParts !== undefined ? buildConstraint(parts.constraintParts, parts.name) : undefined,
-    cardinality: hasCardinality
-      ? {
-        min: parts.minCount ?? 1,
-        max: parts.maxCount ?? 1,
-      }
-      : undefined,
-  };
-}
-
-export function buildConstraint(parts: IConstraintParts, predicateName?: string): IConstraint | undefined {
-  if (parts.classConstraint !== undefined) {
-    return {
-      value: new Set([parts.classConstraint]),
-      type: ConstraintType.CLASS,
-    };
-  }
-
-  if (parts.shapeConstraint !== undefined) {
-    return {
-      value: new Set([parts.shapeConstraint]),
-      type: ConstraintType.SHAPE,
-    };
-  }
-
-  if (parts.datatypeConstraint !== undefined) {
-    const facets: Partial<IConstraint> = {};
-    if (parts.minInclusive !== undefined) {
-      facets.minInclusive = parts.minInclusive;
-    }
-    if (parts.maxInclusive !== undefined) {
-      facets.maxInclusive = parts.maxInclusive;
-    }
-    if (parts.minExclusive !== undefined) {
-      facets.minExclusive = parts.minExclusive;
-    }
-    if (parts.maxExclusive !== undefined) {
-      facets.maxExclusive = parts.maxExclusive;
-    }
-    if (parts.pattern !== undefined) {
-      facets.pattern = parts.pattern;
-    }
-    if (parts.flags !== undefined) {
-      facets.flags = parts.flags;
-    }
-
-    return {
-      value: new Set([parts.datatypeConstraint]),
-      type: predicateName === RDF.type
-        ? ConstraintType.CLASS
-        : ConstraintType.DATATYPE,
-      ...facets,
-    };
-  }
-
-  return undefined;
 }
 
 export function isNegativeCardinality(minCount?: number, maxCount?: number): boolean {
   return minCount === 0 && maxCount === 0;
-}
-
-function constraintToParts(constraint: IConstraint | undefined): IConstraintParts | undefined {
-  if (constraint === undefined) {
-    return undefined;
-  }
-
-  const firstValue = constraint.value.values().next().value as string | undefined;
-  const facets: IConstraintParts = {
-    minInclusive: constraint.minInclusive,
-    maxInclusive: constraint.maxInclusive,
-    minExclusive: constraint.minExclusive,
-    maxExclusive: constraint.maxExclusive,
-    pattern: constraint.pattern,
-    flags: constraint.flags,
-  };
-
-  if (firstValue === undefined) {
-    return facets;
-  }
-
-  if (constraint.type === ConstraintType.SHAPE) {
-    facets.shapeConstraint = firstValue;
-  } else if (constraint.type === ConstraintType.CLASS) {
-    facets.classConstraint = firstValue;
-  } else if (constraint.type === ConstraintType.DATATYPE) {
-    facets.datatypeConstraint = firstValue;
-  }
-
-  return facets;
 }
 
 export interface IParseShapeFromQuadsOptions extends IShapeParserOptions {
