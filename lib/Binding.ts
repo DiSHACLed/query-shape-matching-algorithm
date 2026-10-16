@@ -1,4 +1,4 @@
-import { ConstraintType, IConstraint, IPredicate, IShape, OneOfPathIndexed } from "./Shape";
+import { ConstraintType, IConstraint, IPredicate, IShape, OneOfPathIndexed, withoutTargets } from "./Shape";
 import { IStarPatternWithDependencies, type ITriple, Triple } from "./Triple";
 import { RDF } from "./constant";
 import { impliedPredicateNames, impliedPredicates, isSubjectOutsideNodeTargets } from "./target";
@@ -131,16 +131,13 @@ export class Bindings implements IBindings {
     private dependencyEvidence = new Map<string, IDependencyEvidence[]>();
     private typeOfContainment: IContainmentType = { result: ContainmentType.NONE, unContaineStarPattern: [] };
     private alreadyTraversed: Map<string, boolean>;
-    // Whether the shape is used on its own, so that its targets apply; false when it is reached through sh:node
-    private readonly useTargets: boolean;
     public readonly starPattern: IStarPatternWithDependencies;
 
-    public constructor(shape: IShape, starPattern: IStarPatternWithDependencies, linkedShape: Map<string, IShape>, unionStarPattern?: IStarPatternWithDependencies[][], strict?: boolean, alreadyTraversed?: Map<string, boolean>, useTargets?: boolean) {
+    public constructor(shape: IShape, starPattern: IStarPatternWithDependencies, linkedShape: Map<string, IShape>, unionStarPattern?: IStarPatternWithDependencies[][], strict?: boolean, alreadyTraversed?: Map<string, boolean>) {
         this.starPattern = starPattern;
         this.strict = strict ?? false;
         this.closedShape = shape.closed;
         this.alreadyTraversed = alreadyTraversed ?? new Map();
-        this.useTargets = useTargets ?? true;
         for (const { triple } of starPattern.starPattern.values()) {
             this.bindings.set(triple.predicate, undefined);
             this.allOptional = this.allOptional && triple.isOptional === true;
@@ -148,7 +145,7 @@ export class Bindings implements IBindings {
         for (const predicate of shape.getAll()) {
             this.shapePredicateBind.set(predicate.name, false);
         }
-        for (const predicate of impliedPredicateNames(shape, this.useTargets)) {
+        for (const predicate of impliedPredicateNames(shape)) {
             if (!this.shapePredicateBind.has(predicate)) {
                 this.shapePredicateBind.set(predicate, false);
             }
@@ -163,7 +160,7 @@ export class Bindings implements IBindings {
 
     private calculateBinding(shape: IShape, starPattern: IStarPatternWithDependencies, linkedShape: Map<string, IShape>, unionStarPattern: IStarPatternWithDependencies[][]): void {
         for (const union of unionStarPattern) {
-            this.unionBindings.push(new UnionBinding(shape, union, linkedShape, this.useTargets));
+            this.unionBindings.push(new UnionBinding(shape, union, linkedShape));
         }
         const negatedTriples: ITriple[] = [];
         for (const { triple, dependencies } of starPattern.starPattern.values()) {
@@ -186,7 +183,7 @@ export class Bindings implements IBindings {
             }
             // constraints the shape implies through its targets or sh:ignoredProperties
             if (!negatedByShape) {
-                predicates = predicates.concat(impliedPredicates(shape, triple.predicate, this.useTargets));
+                predicates = predicates.concat(impliedPredicates(shape, triple.predicate));
             }
 
             if (singlePredicate === undefined && predicates.length === 0) {
@@ -214,7 +211,7 @@ export class Bindings implements IBindings {
         if (!this.strict) {
             for (const excludedPredicate of starPattern.excludedPredicates ?? []) {
                 const declaredPredicate = shape.get(excludedPredicate);
-                const required = [declaredPredicate, ...impliedPredicates(shape, excludedPredicate, this.useTargets)]
+                const required = [declaredPredicate, ...impliedPredicates(shape, excludedPredicate)]
                     .some(predicate => predicate !== undefined && predicate.negative !== true && (predicate.cardinality?.min ?? 0) >= 1);
                 if (declaredPredicate?.negative !== true && required) {
                     this.negativeContradiction = true;
@@ -222,7 +219,7 @@ export class Bindings implements IBindings {
             }
         }
         // A shape about given nodes only cannot contain a star pattern about another constant subject.
-        const subjectOutsideTargets = this.useTargets && isSubjectOutsideNodeTargets(shape, starPattern);
+        const subjectOutsideTargets = isSubjectOutsideNodeTargets(shape, starPattern);
         // negative triple in a strict containment mean that the we can take any values
         // see paper https://link.springer.com/chapter/10.1007/978-3-319-25007-6_1
         if (!this.strict) {
@@ -411,8 +408,7 @@ export class Bindings implements IBindings {
             if (currentLinkedShape === undefined) {
                 return ConstraintResult.RESPECT;
             }
-            // SHACL ignores the targets of a shape reached through sh:node
-            const nestedBinding = new Bindings(currentLinkedShape, dependencies, linkedShape, [], this.strict, undefined, false);
+            const nestedBinding = new Bindings(withoutTargets(currentLinkedShape), dependencies, linkedShape, [], this.strict);
             this.recordDependencyEvidence(dependencies.name, currentLinkedShape, nestedBinding);
             for (const [starPatternName, evidence] of nestedBinding.dependencyEvidence) {
                 for (const entry of evidence) {
@@ -668,12 +664,12 @@ export class UnionBinding {
     public readonly shape: IShape;
     public readonly linkedShape: Map<string, IShape>;
 
-    public constructor(shape: IShape, union: IStarPatternWithDependencies[], linkedShape: Map<string, IShape>, useTargets?: boolean) {
+    public constructor(shape: IShape, union: IStarPatternWithDependencies[], linkedShape: Map<string, IShape>) {
         this.shape = shape;
         this.linkedShape = linkedShape;
         this.bindings = [];
         for (const starPattern of union) {
-            this.bindings.push(new Bindings(shape, starPattern, linkedShape, undefined, undefined, undefined, useTargets));
+            this.bindings.push(new Bindings(shape, starPattern, linkedShape));
         }
         this.hasOneContained = this.determineHasOneAtLeastContainment();
         this.areAllContained = this.determineAllContained();

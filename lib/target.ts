@@ -95,26 +95,23 @@ export function nodeTargetKey(term: Term): string {
  * A constraint implied by a target is only required (minimum 1) when every focus node carries it,
  * see {@link targetAlternatives}.
  *
- * Targets only apply when the shape is used on its own (`useTargets`): SHACL ignores them when the
- * shape is reached through sh:node. sh:ignoredProperties applies in both cases.
+ * A shape reached through sh:node has no targets here: SHACL ignores them (see withoutTargets).
  */
-export function impliedPredicates(shape: IShape, predicate: string, useTargets: boolean): IPredicate[] {
+export function impliedPredicates(shape: IShape, predicate: string): IPredicate[] {
   const implied: IPredicate[] = [];
-  if (useTargets) {
-    const alternatives = targetAlternatives(shape.targets);
-    const required = alternatives.length === 1 && focusNodes(shape.targets).kind === 'alternatives';
-    for (const alternative of alternatives) {
-      if (alternative.predicate !== predicate) {
-        continue;
-      }
-      implied.push({
-        name: predicate,
-        ...alternative.classes !== undefined ?
-          { constraint: { type: ConstraintType.CLASS, value: new Set(alternative.classes) } } :
-          {},
-        cardinality: { min: required ? 1 : 0, max: -1 },
-      });
+  const alternatives = targetAlternatives(shape.targets);
+  const required = alternatives.length === 1 && focusNodes(shape.targets).kind === 'alternatives';
+  for (const alternative of alternatives) {
+    if (alternative.predicate !== predicate) {
+      continue;
     }
+    implied.push({
+      name: predicate,
+      ...alternative.classes !== undefined ?
+        { constraint: { type: ConstraintType.CLASS, value: new Set(alternative.classes) } } :
+        {},
+      cardinality: { min: required ? 1 : 0, max: -1 },
+    });
   }
   if (shape.closed && shape.ignoredProperties.includes(predicate)) {
     implied.push({ name: predicate, cardinality: { min: 0, max: -1 }, optional: true });
@@ -125,12 +122,10 @@ export function impliedPredicates(shape: IShape, predicate: string, useTargets: 
 /**
  * Every predicate for which {@link impliedPredicates} yields a constraint.
  */
-export function impliedPredicateNames(shape: IShape, useTargets: boolean): string[] {
+export function impliedPredicateNames(shape: IShape): string[] {
   const names = new Set<string>();
-  if (useTargets) {
-    for (const { predicate } of targetAlternatives(shape.targets)) {
-      names.add(predicate);
-    }
+  for (const { predicate } of targetAlternatives(shape.targets)) {
+    names.add(predicate);
   }
   if (shape.closed) {
     for (const predicate of shape.ignoredProperties) {

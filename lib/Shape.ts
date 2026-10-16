@@ -332,7 +332,7 @@ export class Shape implements IShape {
       negativePredicates: this.negativePredicates,
       oneOf: this.oneOf
     };
-    if (Object.values(this.targets).some(values => values.length > 0)) {
+    if (declaresTargets(this.targets)) {
       obj.targets = this.targets;
     }
     if (this.ignoredProperties.length > 0) {
@@ -499,6 +499,37 @@ export function tryCreateShape(args: IShapeArgs): IShape | ShapeError {
     }
     throw error;
   }
+}
+
+/**
+ * Whether there is at least one target.
+ */
+export function declaresTargets(targets: IShapeTargets): boolean {
+  return Object.values(targets).some(values => values.length > 0);
+}
+
+const TARGETLESS_SHAPES = new WeakMap<IShape, IShape>();
+
+/**
+ * The shape as SHACL applies it when the shape is reached through sh:node: without its targets.
+ */
+export function withoutTargets(shape: IShape): IShape {
+  if (!declaresTargets(shape.targets)) {
+    return shape;
+  }
+  let targetless = TARGETLESS_SHAPES.get(shape);
+  if (targetless === undefined) {
+    targetless = new Shape({
+      name: shape.name,
+      positivePredicates: shape.positivePredicates.map(predicate => shape.get(predicate) ?? predicate),
+      negativePredicates: shape.negativePredicates.map(predicate => shape.get(predicate) ?? predicate),
+      closed: shape.closed,
+      oneOf: shape.oneOf,
+      ignoredProperties: shape.ignoredProperties,
+    });
+    TARGETLESS_SHAPES.set(shape, targetless);
+  }
+  return targetless;
 }
 
 export function isNegativeCardinality(minCount?: number, maxCount?: number): boolean {

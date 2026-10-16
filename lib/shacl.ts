@@ -1,7 +1,7 @@
 import type * as RDF from '@rdfjs/types';
 import { DataFactory } from 'rdf-data-factory';
 import type { OneOf, IShape, IPredicate, IConstraintDeclaration } from './Shape';
-import { PoorlyFormatedShapeError, walkRdfList, buildConstraint, tryCreateShape, isNegativeCardinality } from './Shape';
+import { PoorlyFormatedShapeError, walkRdfList, buildConstraint, tryCreateShape, isNegativeCardinality, declaresTargets } from './Shape';
 import type { ShapeError, IShapeTargets } from './Shape';
 import { SHACL, RDF as RDF_VOCAB, RDFS, XSD } from './constant';
 import { addDiagnostic, getPolicy, type IShapeParserOptions } from './parser-policy';
@@ -340,7 +340,7 @@ function buildShape(
     const orHeads = [...map.orLists.get(shapeIri) ?? [], ...map.xoneLists.get(shapeIri) ?? []];
     const hasOrList = orHeads.length > 0;
     const targets = collectTargets(map, shapeIri);
-    const hasTarget = Object.values(targets).some(values => values.length > 0);
+    const hasTarget = declaresTargets(targets);
 
     // A shape that only declares targets still describes nodes: they exist and are of the target
     // kind, even though the shape constrains none of their properties.
