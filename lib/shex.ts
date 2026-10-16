@@ -9,8 +9,8 @@ import type {
   IConstraint,
   IConstraintFacets,
 } from './Shape';
-import { PoorlyFormatedShapeError, walkRdfList, tryCreateShape, buildConstraint, isNegativeCardinality } from './Shape';
-import { addDiagnostic, getPolicy, type IShapeParserOptions } from './parser-policy';
+import { PoorlyFormatedShapeError, tryCreateShape, buildConstraint, isNegativeCardinality } from './Shape';
+import { type IShapeParserOptions, readRdfList } from './parser-policy';
 
 const DF = new DataFactory();
 const RDF_TRUE = DF.literal('true', DF.namedNode(XSD.boolean));
@@ -133,6 +133,7 @@ function concatShapeInfo(
   } else {
     expressions = mapTripleShex.mapLogicLinkIdExpressions.get(expression);
   }
+  const context: IShexParseContext = { map: mapTripleShex, shapeIri, options };
   // If there is only one expression
   if (expressions === undefined) {
     // an undefined expression without expressions has already returned an error above
@@ -140,55 +141,17 @@ function concatShapeInfo(
     if (!predicateAdded) {
       return new PoorlyFormatedShapeError('there are no predicates in the shape');
     }
-  } else if (expression === undefined) {
-    const current = mapTripleShex.mapPrevCurrentList.get(expressions);
-    const next = mapTripleShex.mapPrevNextList.get(expressions);
-    const error = handleEachOf(current, next, mapTripleShex, argsFunctionPredicate, shapeIri, options);
-    if (error !== undefined) {
-      return error;
+  } else if (expression === undefined || mapTripleShex.setIriEachOf.has(expression)) {
+    const members = readExpressionList(expressions, 'eachOf', context);
+    if (members instanceof PoorlyFormatedShapeError) {
+      return members;
     }
-  } else if (mapTripleShex.setIriEachOf.has(expression)) {
-    const policy = getPolicy(options);
-    const walked = walkRdfList(expressions, {
-      firstByNode: mapTripleShex.mapPrevCurrentList,
-      restByNode: mapTripleShex.mapPrevNextList,
-    });
-    if (walked.malformed) {
-      addDiagnostic(options, {
-        level: policy.strictRdfLists ? 'error' : 'warning',
-        code: 'MALFORMED_RDF_LIST',
-        message: `Malformed RDF list while resolving eachOf for <${shapeIri}>`,
-        shapeIri,
-        nodeId: expressions,
-      });
-      if (policy.strictRdfLists) {
-        return new PoorlyFormatedShapeError('An RDF list is poorly defined');
-      }
-    }
-
-    const current = mapTripleShex.mapPrevCurrentList.get(expressions);
-    const next = mapTripleShex.mapPrevNextList.get(expressions);
-    const error = handleEachOf(
-      current,
-      next,
-      mapTripleShex,
-      argsFunctionPredicate,
-      shapeIri,
-      options,
-    );
+    const error = handleEachOf(members, argsFunctionPredicate, context);
     if (error !== undefined) {
       return error;
     }
   } else if (mapTripleShex.setIriOneOf.has(expression)) {
-    const error = handleOneOf(
-      expression,
-      expression,
-      mapTripleShex,
-      argsFunctionPredicate,
-      mapTripleShex.setIriEachOf.has(expression),
-      shapeIri,
-      options,
-    );
+    const error = handleOneOf(expression, expression, argsFunctionPredicate, mapTripleShex.setIriEachOf.has(expression), context);
     if (error !== undefined) {
       return error;
     }
@@ -281,78 +244,63 @@ function appendPredicates(
   return false;
 }
 
+/**
+ * What the ShEx list handlers need besides the lists they fill.
+ */
+interface IShexParseContext {
+  map: IMapTripleShex;
+  shapeIri: string;
+  options?: IShapeParserOptions;
+}
+
+function readExpressionList(head: string, construct: string, context: IShexParseContext): string[] | PoorlyFormatedShapeError {
+  return readRdfList(head, {
+    firstByNode: context.map.mapPrevCurrentList,
+    restByNode: context.map.mapPrevNextList,
+  }, { shapeIri: context.shapeIri, construct, options: context.options });
+}
+
+/**
+ * Add the triple expressions of a oneOf (or of an eachOf inside a oneOf) as branches of the oneOf
+ * stored at `index` in `prevArgsFunctionPredicate`. Nested oneOf and eachOf expressions add their
+ * branches to the same oneOf.
+ */
 function handleOneOf(
   iri: string,
   index: string,
-  mapTripleShex: IMapTripleShex,
   prevArgsFunctionPredicate: IAppendPredicateArgs,
   eachOf: boolean,
-  shapeIri: string,
-  options?: IShapeParserOptions,
+  context: IShexParseContext,
 ): undefined | PoorlyFormatedShapeError {
+  const { map } = context;
   const positivePredicates: IPredicate[] = [];
   const negativePredicates: string[] = [];
   const argsFunctionPredicate: IAppendPredicateArgs = {
-    map: mapTripleShex,
+    map,
     positivePredicates,
     negativePredicates,
     oneOf: new Map()
   };
-  const expressions = mapTripleShex.mapLogicLinkIdExpressions.get(iri);
+  const expressions = map.mapLogicLinkIdExpressions.get(iri);
   // we don't really support validation of format
   /* istanbul ignore next */
   if (expressions === undefined) {
     return new PoorlyFormatedShapeError('There are no expressions in a one of');
   }
 
-  const policy = getPolicy(options);
-  const walked = walkRdfList(expressions, {
-    firstByNode: mapTripleShex.mapPrevCurrentList,
-    restByNode: mapTripleShex.mapPrevNextList,
-  });
-
-  if (walked.malformed) {
-    addDiagnostic(options, {
-      level: policy.strictRdfLists ? 'error' : 'warning',
-      code: 'MALFORMED_RDF_LIST',
-      message: `Malformed RDF list while resolving oneOf for <${shapeIri}>`,
-      shapeIri,
-      nodeId: expressions,
-    });
-    if (policy.strictRdfLists) {
-      return new PoorlyFormatedShapeError('An RDF list is poorly defined');
-    }
+  const members = readExpressionList(expressions, 'oneOf', context);
+  if (members instanceof PoorlyFormatedShapeError) {
+    return members;
   }
-
-  let current = mapTripleShex.mapPrevCurrentList.get(expressions);
-  let next = mapTripleShex.mapPrevNextList.get(expressions);
-  while (current !== undefined) {
-    if (!mapTripleShex.setIriOneOf.has(current) && !mapTripleShex.setIriEachOf.has(current)) {
-      const error = handleEachOf(current, next, mapTripleShex, argsFunctionPredicate, shapeIri, options);
-      if (error !== undefined) {
-        return error;
-      }
-    } else {
-      const error = handleOneOf(
-        current,
-        iri,
-        mapTripleShex,
-        prevArgsFunctionPredicate,
-        mapTripleShex.setIriEachOf.has(current),
-        shapeIri,
-        options,
-      );
-      if (error !== undefined) {
-        return error;
-      }
+  for (const member of members) {
+    if (!map.setIriOneOf.has(member) && !map.setIriEachOf.has(member)) {
+      appendPredicates(argsFunctionPredicate, member);
+      continue;
     }
-
-    if (next === undefined) {
-      return new PoorlyFormatedShapeError('An RDF list is poorly defined');
+    const error = handleOneOf(member, iri, prevArgsFunctionPredicate, map.setIriEachOf.has(member), context);
+    if (error !== undefined) {
+      return error;
     }
-
-    current = mapTripleShex.mapPrevCurrentList.get(next);
-    next = mapTripleShex.mapPrevNextList.get(next);
   }
   const currentOneOf = prevArgsFunctionPredicate.oneOf.get(index);
   if (currentOneOf === undefined) {
@@ -375,41 +323,24 @@ function handleOneOf(
   return undefined;
 }
 
+/**
+ * Add the triple expressions of an eachOf to the predicate lists; a oneOf among them adds a oneOf.
+ */
 function handleEachOf(
-  current: string | undefined,
-  next: string | undefined,
-  mapTripleShex: IMapTripleShex,
+  members: string[],
   argsFunctionPredicate: IAppendPredicateArgs,
-  _shapeIri: string,
-  _options?: IShapeParserOptions,
+  context: IShexParseContext,
 ): undefined | PoorlyFormatedShapeError {
-  // Traverse the RDF list
-  while (current !== undefined) {
-    if (!mapTripleShex.setIriOneOf.has(current)) {
-      appendPredicates(argsFunctionPredicate, current);
-    } else {
-      const error = handleOneOf(
-        current,
-        current,
-        mapTripleShex,
-        argsFunctionPredicate,
-        mapTripleShex.setIriEachOf.has(current),
-        _shapeIri,
-        _options,
-      );
-      if (error !== undefined) {
-        return error;
-      }
+  for (const member of members) {
+    if (!context.map.setIriOneOf.has(member)) {
+      appendPredicates(argsFunctionPredicate, member);
+      continue;
     }
-
-    if (next === undefined) {
-      return new PoorlyFormatedShapeError('An RDF list is poorly defined');
+    const error = handleOneOf(member, member, argsFunctionPredicate, context.map.setIriEachOf.has(member), context);
+    if (error !== undefined) {
+      return error;
     }
-
-    current = mapTripleShex.mapPrevCurrentList.get(next);
-    next = mapTripleShex.mapPrevNextList.get(next);
   }
-
   return undefined;
 }
 

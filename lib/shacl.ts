@@ -1,10 +1,10 @@
 import type * as RDF from '@rdfjs/types';
 import { DataFactory } from 'rdf-data-factory';
 import type { OneOf, IShape, IPredicate, IConstraintDeclaration } from './Shape';
-import { PoorlyFormatedShapeError, walkRdfList, buildConstraint, tryCreateShape, isNegativeCardinality, declaresTargets } from './Shape';
+import { PoorlyFormatedShapeError, buildConstraint, tryCreateShape, isNegativeCardinality, declaresTargets } from './Shape';
 import type { ShapeError, IShapeTargets } from './Shape';
 import { SHACL, RDF as RDF_VOCAB, RDFS, XSD } from './constant';
-import { addDiagnostic, getPolicy, type IShapeParserOptions } from './parser-policy';
+import { addDiagnostic, type IRdfListContext, type IShapeParserOptions, readRdfList } from './parser-policy';
 import { nodeTargetKey } from './target';
 
 const DF = new DataFactory();
@@ -384,7 +384,11 @@ function buildShape(
     // Resolve sh:or / sh:xone into oneOf branches
     const oneOfs: OneOf[] = [];
     for (const orHead of orHeads) {
-        const branch = resolveOrList(orHead, map, shapeIri, options);
+        const members = readList(orHead, map, { shapeIri, construct: 'sh:or/sh:xone', options });
+        if (members instanceof PoorlyFormatedShapeError) {
+            return members;
+        }
+        const branch = resolveOrList(members, map);
         if (branch.length > 0) {
             oneOfs.push(branch);
         }
@@ -394,7 +398,10 @@ function buildShape(
     const ignoredHead = map.ignoredLists.get(shapeIri);
     const ignoredProperties = ignoredHead === undefined
         ? []
-        : walkRdfList(ignoredHead, { firstByNode: map.listFirst, restByNode: map.listRest }).values;
+        : readList(ignoredHead, map, { shapeIri, construct: 'sh:ignoredProperties', options });
+    if (ignoredProperties instanceof PoorlyFormatedShapeError) {
+        return ignoredProperties;
+    }
 
     return tryCreateShape({
         name: shapeIri,
@@ -491,44 +498,24 @@ function buildPredicate(path: string, data: IPropertyShapeData): IPredicate {
     };
 }
 
+function readList(head: string, map: IMapTripleShacl, context: IRdfListContext): string[] | PoorlyFormatedShapeError {
+    return readRdfList(head, { firstByNode: map.listFirst, restByNode: map.listRest }, context);
+}
+
 /**
- * Walk an RDF list headed at `head` and collect each member as an
- * IPredicate[], returning them as a single OneOf (array of paths/branches).
+ * Collect the members of an sh:or (or sh:xone) list as a single OneOf: one branch per member.
  *
  * Each list member is itself a shape-like blank node that should have
  * sh:property children. We collect those into one OneOfPath per member.
  */
-function resolveOrList(
-    head: string,
-    map: IMapTripleShacl,
-    shapeIri: string,
-    options?: IShapeParserOptions,
-): OneOf {
+function resolveOrList(members: string[], map: IMapTripleShacl): OneOf {
     const result: OneOf = [];
-
-    const policy = getPolicy(options);
-    const walked = walkRdfList(head, {
-        firstByNode: map.listFirst,
-        restByNode: map.listRest,
-    });
-
-    if (walked.malformed) {
-        addDiagnostic(options, {
-            level: policy.strictRdfLists ? 'error' : 'warning',
-            code: 'MALFORMED_RDF_LIST',
-            message: `Malformed RDF list while resolving sh:or/sh:xone for <${shapeIri}>`,
-            shapeIri,
-            nodeId: head,
-        });
-    }
-
-    for (const memberId of walked.values) {
+    for (const memberId of members) {
         const branch = resolveOrMember(memberId, map);
         if (branch.length > 0) {
             result.push(branch);
         }
     }
-
     return result;
 }
 

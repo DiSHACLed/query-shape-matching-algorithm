@@ -76,6 +76,41 @@ describe('parseShapeFromQuads', () => {
 
     expect(diagnostics.some(d => d.code === 'MALFORMED_RDF_LIST')).toBe(true);
   });
+
+  describe('a malformed SHACL list', () => {
+    // The second cell of the sh:or list has no rdf:rest
+    const malformedOr = `
+      @prefix sh: <http://www.w3.org/ns/shacl#> .
+      @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+      @prefix ex: <http://example.org/> .
+      <${shapeIri}> a sh:NodeShape ;
+        sh:property [ sh:path ex:name ] ;
+        sh:or _:list .
+      _:list rdf:first [ sh:path ex:label ] ; rdf:rest _:rest .
+      _:rest rdf:first [ sh:path ex:title ] .`;
+
+    it('is a parse error by default', async () => {
+      const diagnostics: ParserDiagnostic[] = [];
+      const shape = await parseShapeFromQuads(n3Parser.parse(malformedOr), shapeIri, { format: 'shacl', diagnostics });
+
+      expect(shape).toBeInstanceOf(Error);
+      expect(diagnostics.map(d => [ d.code, d.level ])).toStrictEqual([[ 'MALFORMED_RDF_LIST', 'error' ]]);
+    });
+
+    it('keeps its members up to the defect when the policy is non-strict', async () => {
+      const diagnostics: ParserDiagnostic[] = [];
+      const shape = await parseShapeFromQuads(n3Parser.parse(malformedOr), shapeIri, {
+        format: 'shacl',
+        diagnostics,
+        policy: { strictRdfLists: false },
+      });
+
+      expect(shape).not.toBeInstanceOf(Error);
+      expect((shape as IShape).oneOf.map(oneOf => oneOf.map(path => path.map(predicate => predicate.name))))
+        .toStrictEqual([[[ 'http://example.org/label' ]]]);
+      expect(diagnostics.map(d => [ d.code, d.level ])).toStrictEqual([[ 'MALFORMED_RDF_LIST', 'warning' ]]);
+    });
+  });
 });
 
 function canonical(shape: IShape): { positive: string[]; negative: string[]; cards: Record<string, unknown> } {
