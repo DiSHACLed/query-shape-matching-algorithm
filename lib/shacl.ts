@@ -5,6 +5,7 @@ import { PoorlyFormatedShapeError, walkRdfList, buildConstraint, tryCreateShape,
 import type { ShapeError, IShapeTargets } from './Shape';
 import { SHACL, RDF as RDF_VOCAB, RDFS, XSD } from './constant';
 import { addDiagnostic, getPolicy, type IShapeParserOptions } from './parser-policy';
+import { nodeTargetKey } from './target';
 
 const DF = new DataFactory();
 const RDF_TRUE = DF.literal('true', DF.namedNode(XSD.boolean));
@@ -251,9 +252,7 @@ function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
 
     // Targets: the nodes the shape describes when it is used on its own
     if (quad.predicate.equals(SHACL.terms.targetNode)) {
-        // A literal can be a node target too; keep it distinct from an IRI with the same text
-        const node = quad.object.termType === 'Literal' ? JSON.stringify(o) : o;
-        getOrCreateTargets(map, s).nodes.add(node);
+        getOrCreateTargets(map, s).nodes.add(nodeTargetKey(quad.object));
         return;
     }
     if (quad.predicate.equals(SHACL.terms.targetClass)) {

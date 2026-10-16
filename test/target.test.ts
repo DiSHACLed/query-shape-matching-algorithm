@@ -52,6 +52,21 @@ describe('SHACL targets', () => {
             });
         });
 
+        it('should keep the datatype and language of a literal node target, and a blank node apart from an IRI', async () => {
+            const shape = await parseShape(`
+                @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+                ex:S a sh:NodeShape ;
+                    sh:targetNode "1"^^xsd:integer, "1", "Alice"@en, _:alice ;
+                    sh:property [ sh:path ex:name ] .`, 'S');
+            const nodes = shape.targets.nodes;
+            expect(nodes.slice(0, 3)).toStrictEqual([
+                '"1"^^<http://www.w3.org/2001/XMLSchema#integer>',
+                '"1"',
+                '"Alice"@en',
+            ]);
+            expect(nodes[3]).toMatch(/^_:/);
+        });
+
         it('should give a shape that is also a class an implicit class target', async () => {
             const direct = await parseShape(`ex:Place a rdfs:Class, sh:NodeShape ; sh:property [ sh:path ex:name ] .`, 'Place');
             expect(direct.toObject().targets?.classes).toStrictEqual([`${EX}Place`]);

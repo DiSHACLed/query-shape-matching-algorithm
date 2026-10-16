@@ -2,8 +2,9 @@ import type { Term } from '@rdfjs/types';
 import type { Algebra } from '@traqula/algebra-transformations-1-1';
 import { DataFactory } from 'rdf-data-factory';
 import { type ITripleWithDependencies, Triple, type IStarPatternWithDependencies, type ITriple } from './Triple';
-import { ConstraintType, type IPredicate, type IShape, targetsOf } from './Shape';
+import { ConstraintType, type IPredicate, type IShape } from './Shape';
 import { RDF, XSD } from './constant';
+import { focusNodes, type ITargetAlternative } from './target';
 import type { IQuery, UnsupportedConstruct } from './query';
 
 const DF = new DataFactory();
@@ -88,41 +89,60 @@ export function shapeToQuery(shape: IShape, options?: IShapeToQueryOptions): IQu
  * ignored and reported, which can only over-estimate relevance.
  */
 function addTargetsOfInputShape(shape: IShape, context: IShapeToQueryBuildContext): void {
-  const { nodes, classes, subjectsOf, objectsOf } = targetsOf(shape);
-  const kinds = [ nodes, classes, subjectsOf, objectsOf ].filter(values => values.length > 0).length;
   const focus = context.starPatterns.get(shape.name);
-  if (kinds === 0 || focus === undefined) {
+  const focusNodesOfShape = focusNodes(shape.targets);
+  if (focus === undefined) {
     return;
   }
 
-  if (nodes.length > 0 || objectsOf.length > 0) {
-    if (kinds > 1 || objectsOf.length > 1) {
+  switch (focusNodesOfShape.kind) {
+    case 'any':
+      return;
+    case 'mixed':
       context.unsupported.add('TARGETS');
       return;
-    }
-    if (nodes.length > 0) {
-      focus.subjectValues = new Set(nodes);
+    case 'nodes':
+      focus.subjectValues = new Set(focusNodesOfShape.nodes);
+      return;
+    case 'objectsOf': {
+      const { predicate } = focusNodesOfShape;
+      const incomingName = `${shape.name}#targetObjectsOf`;
+      const triple = new Triple({ subject: incomingName, predicate, object: DF.namedNode(shape.name) });
+      context.starPatterns.set(incomingName, {
+        starPattern: new Map([[ predicate, { triple, dependencies: focus } ]]),
+        name: incomingName,
+        isVariable: true,
+      });
       return;
     }
-    const incomingName = `${shape.name}#targetObjectsOf`;
-    const triple = new Triple({ subject: incomingName, predicate: objectsOf[0], object: DF.namedNode(shape.name) });
-    context.starPatterns.set(incomingName, {
-      starPattern: new Map([[ objectsOf[0], { triple, dependencies: focus } ]]),
-      name: incomingName,
-      isVariable: true,
-    });
-    return;
+    case 'alternatives':
+      addTargetAlternatives(shape.name, focus, focusNodesOfShape.alternatives, context);
   }
+}
 
+/**
+ * Require the focus node to satisfy one of the target alternatives: each target class, or each
+ * subjects-of predicate, is a branch of a UNION, or a triple pattern of the focus star pattern when
+ * it is the only one.
+ */
+function addTargetAlternatives(
+  shapeName: string,
+  focus: IStarPatternWithDependencies,
+  targetAlternatives: ITargetAlternative[],
+  context: IShapeToQueryBuildContext,
+): void {
   const alternatives: ITripleWithDependencies[] = [];
-  for (const value of classes) {
-    alternatives.push({ triple: new Triple({ subject: shape.name, predicate: RDF.type, object: DF.namedNode(value) }) });
-  }
-  for (const predicate of subjectsOf) {
+  for (const { predicate, classes } of targetAlternatives) {
+    if (classes !== undefined) {
+      for (const value of classes) {
+        alternatives.push({ triple: new Triple({ subject: shapeName, predicate, object: DF.namedNode(value) }) });
+      }
+      continue;
+    }
     // A declared property constraint on the predicate keeps its object and dependency, but is now required
     const declared = focus.starPattern.get(predicate);
-    const object = declared?.triple.object ?? DF.variable(nextVariableName(shape.name, predicate, context.variableCounts));
-    alternatives.push({ triple: new Triple({ subject: shape.name, predicate, object }), dependencies: declared?.dependencies });
+    const object = declared?.triple.object ?? DF.variable(nextVariableName(shapeName, predicate, context.variableCounts));
+    alternatives.push({ triple: new Triple({ subject: shapeName, predicate, object }), dependencies: declared?.dependencies });
   }
 
   if (alternatives.length === 1) {
@@ -130,9 +150,9 @@ function addTargetsOfInputShape(shape: IShape, context: IShapeToQueryBuildContex
     return;
   }
   context.unions.push(alternatives.map(alternative => ({
-    starPatterns: new Map([[ shape.name, {
+    starPatterns: new Map([[ shapeName, {
       starPattern: new Map([[ alternative.triple.predicate, alternative ]]),
-      name: shape.name,
+      name: shapeName,
       isVariable: true,
     } ]]),
   })));
@@ -228,9 +248,8 @@ function buildStarPatternFromShape(shape: IShape, context: IShapeToQueryBuildCon
     const tripleWithDependencies = predicateToTripleWithDependencies(shape.name, predicate, context, context.filters);
     starPattern.starPattern.set(predicate.name, tripleWithDependencies);
   }
-  const negativePredicates = shape.negativePredicates ?? [];
-  if (negativePredicates.length > 0) {
-    starPattern.excludedPredicates = new Set(negativePredicates);
+  if (shape.negativePredicates.length > 0) {
+    starPattern.excludedPredicates = new Set(shape.negativePredicates);
   }
 
   context.starPatterns.set(shape.name, starPattern);

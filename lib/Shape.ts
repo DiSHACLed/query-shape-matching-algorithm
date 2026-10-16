@@ -31,8 +31,12 @@ export interface IShape extends IShapeObj {
    * @returns {Set<string>} - IRIs of the shape necessary for the constraint
    */
   getLinkedShapeIri: () => Set<string>;
+  // A shape always has the fields that its serialized form leaves out when they are empty
+  negativePredicates: string[];
   oneOf: OneOf[];
   oneOfIndexed: OneOfIndexed[];
+  targets: IShapeTargets;
+  ignoredProperties: string[];
 }
 
 /**
@@ -128,7 +132,7 @@ export const enum ConstraintType {
  * describing any node.
  */
 export interface IShapeTargets {
-  // sh:targetNode values (a literal is kept in its JSON-quoted form)
+  // sh:targetNode values, as keys made by nodeTargetKey: an IRI is its value
   nodes: string[];
   // sh:targetClass values, and the shape itself when it is also an rdfs:Class (implicit class target)
   classes: string[];
@@ -165,26 +169,6 @@ export interface IShapeArgs {
   oneOf?: OneOf[];
   targets?: Partial<IShapeTargets>;
   ignoredProperties?: string[];
-}
-
-/**
- * The targets of a shape, with an empty list for every kind it does not declare.
- */
-export function targetsOf(shape: IShapeObj): IShapeTargets {
-  return {
-    nodes: shape.targets?.nodes ?? [],
-    classes: shape.targets?.classes ?? [],
-    subjectsOf: shape.targets?.subjectsOf ?? [],
-    objectsOf: shape.targets?.objectsOf ?? [],
-  };
-}
-
-/**
- * Whether a shape declares at least one target.
- */
-export function hasTargets(shape: IShapeObj): boolean {
-  const { nodes, classes, subjectsOf, objectsOf } = targetsOf(shape);
-  return nodes.length + classes.length + subjectsOf.length + objectsOf.length > 0;
 }
 
 export type OneOf = OneOfPath[];
@@ -348,7 +332,7 @@ export class Shape implements IShape {
       negativePredicates: this.negativePredicates,
       oneOf: this.oneOf
     };
-    if (hasTargets(this)) {
+    if (Object.values(this.targets).some(values => values.length > 0)) {
       obj.targets = this.targets;
     }
     if (this.ignoredProperties.length > 0) {

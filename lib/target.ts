@@ -1,6 +1,7 @@
-import { ConstraintType, type IPredicate, type IShape, hasTargets, targetsOf } from './Shape';
+import type { Term } from '@rdfjs/types';
+import { ConstraintType, type IPredicate, type IShape, type IShapeTargets } from './Shape';
 import type { IStarPatternWithDependencies } from './Triple';
-import { RDF } from './constant';
+import { RDF, XSD } from './constant';
 
 /**
  * The constants the subject of a star pattern is restricted to, or undefined when it is a variable.
@@ -13,6 +14,77 @@ export function constantSubjects(starPattern: IStarPatternWithDependencies): Set
 }
 
 /**
+ * The focus nodes a shape selects through its targets when it is used on its own:
+ *
+ * - `any`: the shape declares no target and describes any node;
+ * - `nodes`: only node targets (sh:targetNode);
+ * - `objectsOf`: a single objects-of target (sh:targetObjectsOf) and no other target;
+ * - `alternatives`: only class and subjects-of targets, see {@link targetAlternatives};
+ * - `mixed`: node or objects-of targets combined with other targets, or several objects-of targets.
+ */
+export type FocusNodes =
+  | { kind: 'any' }
+  | { kind: 'nodes', nodes: string[] }
+  | { kind: 'objectsOf', predicate: string }
+  | { kind: 'alternatives', alternatives: ITargetAlternative[] }
+  | { kind: 'mixed' };
+
+/**
+ * A predicate that some focus nodes carry because of a target: `rdf:type` with one of the target
+ * classes, or the predicate of a subjects-of target.
+ */
+export interface ITargetAlternative {
+  predicate: string;
+  // the target classes, for the alternative of the class targets
+  classes?: string[];
+}
+
+export function focusNodes(targets: IShapeTargets): FocusNodes {
+  const { nodes, classes, subjectsOf, objectsOf } = targets;
+  const kinds = [ nodes, classes, subjectsOf, objectsOf ].filter(values => values.length > 0).length;
+  if (kinds === 0) {
+    return { kind: 'any' };
+  }
+  if (nodes.length === 0 && objectsOf.length === 0) {
+    return { kind: 'alternatives', alternatives: targetAlternatives(targets) };
+  }
+  if (kinds > 1 || objectsOf.length > 1) {
+    return { kind: 'mixed' };
+  }
+  return nodes.length > 0 ? { kind: 'nodes', nodes } : { kind: 'objectsOf', predicate: objectsOf[0] };
+}
+
+/**
+ * The alternatives the class and subjects-of targets offer: one for all the class targets, which
+ * all imply `rdf:type`, and one per subjects-of target. The focus nodes of a shape are the union of
+ * the nodes of its targets, so an alternative holds for every focus node only when it is the only
+ * alternative and the shape has no other target.
+ */
+export function targetAlternatives({ classes, subjectsOf }: IShapeTargets): ITargetAlternative[] {
+  const alternatives: ITargetAlternative[] = classes.length > 0 ? [{ predicate: RDF.type, classes }] : [];
+  return alternatives.concat(subjectsOf.map(predicate => ({ predicate })));
+}
+
+/**
+ * The key of an RDF term as a node target. An IRI is its value, as the constant subject of a star
+ * pattern is; a literal or a blank node is its N-Triples form, so that it neither matches an IRI
+ * with the same text nor loses its datatype or language.
+ */
+export function nodeTargetKey(term: Term): string {
+  if (term.termType === 'BlankNode') {
+    return `_:${term.value}`;
+  }
+  if (term.termType !== 'Literal') {
+    return term.value;
+  }
+  const value = JSON.stringify(term.value);
+  if (term.language !== '') {
+    return `${value}@${term.language}`;
+  }
+  return term.datatype.value === XSD.string ? value : `${value}^^<${term.datatype.value}>`;
+}
+
+/**
  * The property constraints a shape implies without declaring them, as alternatives for a predicate.
  *
  * - A class target (sh:targetClass, or an implicit class target) makes every focus node an instance
@@ -20,9 +92,8 @@ export function constantSubjects(starPattern: IStarPatternWithDependencies): Set
  * - A subjects-of target (sh:targetSubjectsOf) makes every focus node carry the predicate.
  * - A closed shape allows the properties listed by sh:ignoredProperties, without constraining them.
  *
- * The focus nodes of a shape are the union of the nodes of its targets, so an implied constraint is
- * only required (minimum 1) when every focus node carries it: when all the targets are class
- * targets, or when the only target is one subjects-of target.
+ * A constraint implied by a target is only required (minimum 1) when every focus node carries it,
+ * see {@link targetAlternatives}.
  *
  * Targets only apply when the shape is used on its own (`useTargets`): SHACL ignores them when the
  * shape is reached through sh:node. sh:ignoredProperties applies in both cases.
@@ -30,21 +101,22 @@ export function constantSubjects(starPattern: IStarPatternWithDependencies): Set
 export function impliedPredicates(shape: IShape, predicate: string, useTargets: boolean): IPredicate[] {
   const implied: IPredicate[] = [];
   if (useTargets) {
-    const { nodes, classes, subjectsOf, objectsOf } = targetsOf(shape);
-    if (predicate === RDF.type && classes.length > 0) {
-      const onlyClassTargets = nodes.length + subjectsOf.length + objectsOf.length === 0;
+    const alternatives = targetAlternatives(shape.targets);
+    const required = alternatives.length === 1 && focusNodes(shape.targets).kind === 'alternatives';
+    for (const alternative of alternatives) {
+      if (alternative.predicate !== predicate) {
+        continue;
+      }
       implied.push({
         name: predicate,
-        constraint: { type: ConstraintType.CLASS, value: new Set(classes) },
-        cardinality: { min: onlyClassTargets ? 1 : 0, max: -1 },
+        ...alternative.classes !== undefined ?
+          { constraint: { type: ConstraintType.CLASS, value: new Set(alternative.classes) } } :
+          {},
+        cardinality: { min: required ? 1 : 0, max: -1 },
       });
     }
-    if (subjectsOf.includes(predicate)) {
-      const onlyTarget = subjectsOf.length === 1 && nodes.length + classes.length + objectsOf.length === 0;
-      implied.push({ name: predicate, cardinality: { min: onlyTarget ? 1 : 0, max: -1 } });
-    }
   }
-  if (shape.closed && (shape.ignoredProperties ?? []).includes(predicate)) {
+  if (shape.closed && shape.ignoredProperties.includes(predicate)) {
     implied.push({ name: predicate, cardinality: { min: 0, max: -1 }, optional: true });
   }
   return implied;
@@ -56,16 +128,12 @@ export function impliedPredicates(shape: IShape, predicate: string, useTargets: 
 export function impliedPredicateNames(shape: IShape, useTargets: boolean): string[] {
   const names = new Set<string>();
   if (useTargets) {
-    const { classes, subjectsOf } = targetsOf(shape);
-    if (classes.length > 0) {
-      names.add(RDF.type);
-    }
-    for (const predicate of subjectsOf) {
+    for (const { predicate } of targetAlternatives(shape.targets)) {
       names.add(predicate);
     }
   }
   if (shape.closed) {
-    for (const predicate of shape.ignoredProperties ?? []) {
+    for (const predicate of shape.ignoredProperties) {
       names.add(predicate);
     }
   }
@@ -78,15 +146,12 @@ export function impliedPredicateNames(shape: IShape, useTargets: boolean): strin
  * subject is a constant it does not list. Any other target leaves the subject undecided.
  */
 export function isSubjectOutsideNodeTargets(shape: IShape, starPattern: IStarPatternWithDependencies): boolean {
-  const { nodes, classes, subjectsOf, objectsOf } = targetsOf(shape);
-  if (nodes.length === 0 || classes.length + subjectsOf.length + objectsOf.length > 0) {
-    return false;
-  }
+  const focus = focusNodes(shape.targets);
   const subjects = constantSubjects(starPattern);
-  if (subjects === undefined) {
+  if (focus.kind !== 'nodes' || subjects === undefined) {
     return false;
   }
-  return !Array.from(subjects).some(subject => nodes.includes(subject));
+  return !Array.from(subjects).some(subject => focus.nodes.includes(subject));
 }
 
 /**
@@ -108,10 +173,10 @@ export function describesStarPattern(
   starPattern: IStarPatternWithDependencies,
   incoming: Map<string, Set<string>>,
 ): boolean {
-  if (!hasTargets(shape)) {
+  if (focusNodes(shape.targets).kind === 'any') {
     return true;
   }
-  const { nodes, classes, subjectsOf, objectsOf } = targetsOf(shape);
+  const { nodes, classes, subjectsOf, objectsOf } = shape.targets;
 
   const subjects = constantSubjects(starPattern);
   if (subjects !== undefined && subjects.size > 0 && Array.from(subjects).every(subject => nodes.includes(subject))) {
