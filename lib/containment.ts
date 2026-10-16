@@ -67,10 +67,21 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
     for (const [starPatternName, starPattern] of query.starPatterns) {
       const starPatternUnion = generateStarPatternUnion(query.union ?? [], starPatternName);
       const bindings = new Bindings(shape, starPattern, dependencies, starPatternUnion);
-      const filterCompatibility = evaluateFiltersForShape(query.filters, starPattern, shape);
       bindingResultofShape.set(starPatternName, { result: bindings, shape });
+      // A shape with targets only constrains the nodes of its targets. When the nodes matching the star
+      // pattern need not be among them, its closedness and negative constraints say nothing about those
+      // nodes: it neither supports nor softens a rejection, and its matches count as on an open shape.
       const describes = describesStarPattern(shape, starPattern, incoming);
-      updateContainmentStats(classificationStats, starPatternName, shape, bindings, groupedShapes, filterCompatibility !== FilterTruth.FALSE, describes);
+      recordEvidence(classificationStats.get(starPatternName)!, {
+        shapeName: shape.name,
+        bindings,
+        describes,
+        closed: describes && shape.closed,
+        contradicts: describes && bindings.hasNegativeContradiction(),
+        filterCompatible: evaluateFiltersForShape(query.filters, starPattern, shape) !== FilterTruth.FALSE,
+        hasMatch: bindings.hasRootMatch(),
+        contained: isContainedByCandidate(bindings, groupedShapes, shape),
+      });
     }
   }
 
@@ -85,30 +96,13 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
     for (const { result } of starPatternBindings.values()) {
       for (const evidence of result.getDependencyEvidence()) {
         const stats = classificationStats.get(evidence.starPatternName);
-        if (stats === undefined) {
-          continue;
-        }
-        // As for a candidate shape, a contradiction is evidence of incompatibility: the referenced
-        // shape counts as closed and contributes no match.
-        const contradicts = evidence.bindings.hasNegativeContradiction();
-        if (evidence.closed || contradicts) {
-          stats.hasClosedShape = true;
-        } else {
-          stats.hasOpenShape = true;
-        }
-        if (contradicts) {
-          continue;
-        }
-        if (evidence.contained) {
-          stats.containedTargets.add(evidence.shapeName);
-        }
-        if (evidence.hasMatch || evidence.contained) {
-          stats.bindings.set(evidence.shapeName, evidence.bindings);
-          if (evidence.closed) {
-            stats.rootTargetsClosed.add(evidence.shapeName);
-          } else {
-            stats.rootTargetsOpen.add(evidence.shapeName);
-          }
+        if (stats !== undefined) {
+          recordEvidence(stats, {
+            ...evidence,
+            describes: true,
+            contradicts: evidence.bindings.hasNegativeContradiction(),
+            filterCompatible: true,
+          });
         }
       }
     }
@@ -199,24 +193,34 @@ export function solveShapeShapeContainment({ sourceShape, sourceLinkedShapes, ta
   return solveShapeQueryContainment({ query, shapes: targetShapes, decidingShapes });
 }
 
-function updateContainmentStats(
-  classificationStats: Map<StarPatternName, IContainmentStats>,
-  starPatternName: StarPatternName,
-  shape: IShape,
-  bindings: IBindings,
-  groupedShapes: IShapeWithDependencies[],
-  filterCompatible = true,
-  describes = true,
-): void {
-  const stats = classificationStats.get(starPatternName)!;
-  // A shape with targets only constrains the nodes of its targets. When the nodes matching the star
-  // pattern need not be among them, its closedness and negative constraints say nothing about those
-  // nodes: it neither supports nor softens a rejection, and its matches count as on an open shape.
-  const closed = describes && shape.closed;
-  // A shape that explicitly forbids a required predicate (sh:not) proves incompatibility, so it
-  // must not count as the "open shape" that would soften REJECTED into WEAKLY_REJECTED.
-  const contradicts = describes && bindings.hasNegativeContradiction();
-  if (!describes) {
+/**
+ * What one shape says about one star pattern.
+ */
+interface IShapeEvidence {
+  shapeName: ShapeName;
+  bindings: IBindings;
+  // the shape describes the star pattern, see describesStarPattern
+  describes: boolean;
+  // the shape is closed and describes the star pattern
+  closed: boolean;
+  // the shape describes the star pattern and forbids what it requires, see IBindings.hasNegativeContradiction
+  contradicts: boolean;
+  // no FILTER of the query contradicts the shape
+  filterCompatible: boolean;
+  // the star pattern matched the shape at its root, see IBindings.hasRootMatch
+  hasMatch: boolean;
+  // the shape contains the star pattern
+  contained: boolean;
+}
+
+/**
+ * Add the evidence of a shape to the classification state of a star pattern. A shape that
+ * contradicts the star pattern counts as closed, so it does not soften a rejection, and it
+ * contributes no match.
+ */
+function recordEvidence(stats: IContainmentStats, evidence: IShapeEvidence): void {
+  const { shapeName, bindings, closed, contradicts } = evidence;
+  if (!evidence.describes) {
     stats.hasUndescribedShape = true;
   } else if (closed || contradicts) {
     stats.hasClosedShape = true;
@@ -224,39 +228,32 @@ function updateContainmentStats(
     stats.hasOpenShape = true;
   }
 
-  if (!filterCompatible || contradicts) {
+  if (!evidence.filterCompatible || contradicts) {
     return;
   }
-
-  // Track root-level alignment independently from full containment. A predicate whose sh:node
-  // dependency was neither established nor refuted still matched this shape, so it counts here:
-  // otherwise a root pattern the shape does declare would be reported as no match at all.
-  const hasRootMatch = bindings.getBoundTriple().length > 0 || bindings.hasNonRefutedDependency();
-  if (hasRootMatch) {
-    stats.bindings.set(shape.name, bindings);
-    if (closed) {
-      stats.rootTargetsClosed.add(shape.name);
-    } else {
-      stats.rootTargetsOpen.add(shape.name);
-    }
+  // Root-level alignment is tracked independently from full containment.
+  if (evidence.hasMatch) {
+    stats.bindings.set(shapeName, bindings);
+    (closed ? stats.rootTargetsClosed : stats.rootTargetsOpen).add(shapeName);
   }
-
-  // Full binding means this shape fully contains the star pattern.
-  if (bindings.isFullyBounded() && bindings.containmentType().result === ContainmentType.FULL) {
-    stats.bindings.set(shape.name, bindings);
-    stats.containedTargets.add(shape.name);
+  if (evidence.contained) {
+    stats.bindings.set(shapeName, bindings);
+    stats.containedTargets.add(shapeName);
   }
+}
 
-  // Preserve previous behavior where a disjunction can be considered fully covered
-  // when unresolved alternatives are contained by another candidate shape.
-  if (bindings.isFullyBounded() && bindings.containmentType().result === ContainmentType.PARTIAL) {
-    const unContaineStarPattern = bindings.containmentType().unContaineStarPattern!;
-    const hasDisjuncContainment = findDisjunctContainment(unContaineStarPattern, groupedShapes, shape);
-    if (hasDisjuncContainment) {
-      stats.bindings.set(shape.name, bindings);
-      stats.containedTargets.add(shape.name);
-    }
+/**
+ * Whether a candidate shape contains the star pattern: it binds it fully, or it binds it fully but
+ * for disjunctive branches that another candidate shape contains.
+ */
+function isContainedByCandidate(bindings: IBindings, groupedShapes: IShapeWithDependencies[], shape: IShape): boolean {
+  if (!bindings.isFullyBounded()) {
+    return false;
   }
+  const containment = bindings.containmentType();
+  return containment.result === ContainmentType.FULL ||
+    (containment.result === ContainmentType.PARTIAL &&
+      findDisjunctContainment(containment.unContaineStarPattern!, groupedShapes, shape));
 }
 
 function findDisjunctContainment(starPatterns: IStarPatternWithDependencies[], groupedShapes: IShapeWithDependencies[], shapeExcluded: IShape): boolean {

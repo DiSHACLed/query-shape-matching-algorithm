@@ -41,6 +41,12 @@ export interface IBindings {
      */
     hasNonRefutedDependency: () => boolean;
     /**
+     * Indicate that the root star pattern matched the shape: a triple pattern is bound, or its
+     * predicate matched while its sh:node dependency was left undecided (see hasNonRefutedDependency).
+     * @returns {boolean} whether the star pattern matched the shape at its root
+     */
+    hasRootMatch: () => boolean;
+    /**
      * Shapes that nested star patterns were resolved against while checking sh:node constraints.
      * A referenced shape governs its nested star pattern even when it is not a candidate shape
      * itself, so its open or closed status is evidence for that pattern's classification.
@@ -593,6 +599,10 @@ export class Bindings implements IBindings {
         return this.negativeContradiction;
     }
 
+    public hasRootMatch(): boolean {
+        return this.getBoundTriple().length > 0 || this.hasNonRefutedDependency();
+    }
+
     public hasNonRefutedDependency(): boolean {
         return this.nonRefutedDependency.size > 0;
     }
@@ -610,7 +620,7 @@ export class Bindings implements IBindings {
             starPatternName,
             shapeName: shape.name,
             closed: shape.closed,
-            hasMatch: nested.getBoundTriple().length > 0 || nested.hasNonRefutedDependency(),
+            hasMatch: nested.hasRootMatch(),
             contained: nested.isFullyBounded()
                 && nested.containmentType().result === ContainmentType.FULL,
             bindings: nested,
