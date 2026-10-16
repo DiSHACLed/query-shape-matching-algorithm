@@ -242,41 +242,22 @@ export class Bindings implements IBindings {
             }
         }
         let boundedUnionFull = true;
+        let boundedUnion = true;
         const uncontainedUnionStarPatterns: IStarPatternWithDependencies[] = []
-
-        if (shape.closed === false) {
-            let boundedUnion = true;
-            for (const unionBinding of this.unionBindings) {
-                boundedUnion = ((unionBinding.hasOneContained && !this.strict) ||
-                    (this.strict && unionBinding.areAllContained)) && boundedUnion;
-                boundedUnionFull = boundedUnionFull && unionBinding.areAllContained;
-                if (!unionBinding.areAllContained) {
-                    for (const binding of unionBinding.bindings) {
-                        if (!binding.isFullyBounded()) {
-                            uncontainedUnionStarPatterns.push(binding.starPattern);
-                        }
+        for (const unionBinding of this.unionBindings) {
+            boundedUnion = ((unionBinding.hasOneContained && !this.strict) ||
+                (this.strict && unionBinding.areAllContained)) && boundedUnion;
+            boundedUnionFull = boundedUnionFull && unionBinding.areAllContained;
+            if (!unionBinding.areAllContained) {
+                for (const binding of unionBinding.bindings) {
+                    if (!binding.isFullyBounded()) {
+                        uncontainedUnionStarPatterns.push(binding.starPattern);
                     }
                 }
             }
-            this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion && !this.negativeContradiction
-                && !subjectOutsideTargets;
-        } else {
-            let boundedUnion = true;
-            for (const unionBinding of this.unionBindings) {
-                boundedUnion = ((unionBinding.hasOneContained && !this.strict) ||
-                    (this.strict && unionBinding.areAllContained)) && boundedUnion;
-                boundedUnionFull = boundedUnionFull && unionBinding.areAllContained;
-                if (!unionBinding.areAllContained) {
-                    for (const binding of unionBinding.bindings) {
-                        if (!binding.isFullyBounded()) {
-                            uncontainedUnionStarPatterns.push(binding.starPattern);
-                        }
-                    }
-                }
-            }
-            this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion && !this.negativeContradiction
-                && !subjectOutsideTargets;
         }
+        this.fullyBounded = this.isEveryRequiredTripleBound(starPattern) && boundedUnion && !this.negativeContradiction
+            && !subjectOutsideTargets;
         if (this.fullyBounded) {
             const cycle = new Set<string>();
             const rejectedValues = new Set<string>();
