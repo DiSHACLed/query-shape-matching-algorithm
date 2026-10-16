@@ -138,20 +138,26 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
     starPatternsContainment.set(starPatternName, currentResult);
   }
 
-  const report: Omit<IResult, 'result'> = {
+  return buildResult(
+    getQueryContainmentResult(starPatternsContainment),
     starPatternsContainment,
-    visitShapeBoundedResource: generateVisitStatus(bindingResult, shapes),
-    ...(query.unsupported !== undefined ? { unsupported: query.unsupported } : {}),
+    generateVisitStatus(bindingResult, shapes),
+    query.unsupported,
+  );
+}
+
+function buildResult(
+  result: ContainmentResult,
+  starPatternsContainment: Map<StarPatternName, IContainmentResult>,
+  visitShapeBoundedResource: Map<ShapeName, boolean>,
+  unsupported: UnsupportedConstruct[] | undefined,
+): IResult {
+  return {
+    result,
+    starPatternsContainment,
+    visitShapeBoundedResource,
+    ...(unsupported !== undefined ? { unsupported } : {}),
   };
-
-  Object.defineProperty(report, 'result', {
-    value: getQueryContainmentResult(starPatternsContainment),
-    enumerable: false,
-    writable: false,
-  });
-
-  return report as IResult;
-
 }
 
 /**
@@ -160,19 +166,12 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
  * indications were all false would tell a client to fetch nothing for a query that wants everything.
  */
 function buildMatchesAnyTripleResult(shapes: IShape[], unsupported?: UnsupportedConstruct[]): IResult {
-  const report: Omit<IResult, 'result'> = {
-    starPatternsContainment: new Map(),
-    visitShapeBoundedResource: new Map(shapes.map(shape => [shape.name, true])),
-    ...(unsupported !== undefined ? { unsupported } : {}),
-  };
-
-  Object.defineProperty(report, 'result', {
-    value: ContainmentResult.CONTAINED,
-    enumerable: false,
-    writable: false,
-  });
-
-  return report as IResult;
+  return buildResult(
+    ContainmentResult.CONTAINED,
+    new Map(),
+    new Map(shapes.map(shape => [shape.name, true])),
+    unsupported,
+  );
 }
 
 export interface IShapeContainmentArg {

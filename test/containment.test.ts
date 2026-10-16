@@ -188,7 +188,7 @@ describe('solveShapeQueryContainment', () => {
             };
             const shapes: IShape[] = [];
             const expectedResult: IResult = {
-
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([["x", { result: ContainmentResult.REJECTED, bindings:new Map() }]]),
                 visitShapeBoundedResource: new Map()
             };
@@ -206,7 +206,7 @@ describe('solveShapeQueryContainment', () => {
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];
 
             const expectedResult: IResult = {
-
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings:expect.any(Map) }]
                 ]),
@@ -233,6 +233,7 @@ describe('solveShapeQueryContainment', () => {
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([["z", { result: ContainmentResult.REJECTED, bindings: new Map() }]]),
                 visitShapeBoundedResource: new Map([
                     [shape.name, false],
@@ -257,6 +258,7 @@ describe('solveShapeQueryContainment', () => {
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([["z", { result: ContainmentResult.REJECTED, bindings: new Map() }]]),
                 visitShapeBoundedResource: new Map([
                     [shape.name, false],
@@ -291,6 +293,7 @@ describe('solveShapeQueryContainment', () => {
             });
 
             const expectedResult: IResult = {
+                result: ContainmentResult.WEAKLY_REJECTED,
                 starPatternsContainment: new Map([
                     ["z", { result: ContainmentResult.WEAKLY_REJECTED, bindings: new Map() }]
                 ]),
@@ -318,6 +321,7 @@ describe('solveShapeQueryContainment', () => {
             });
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["z", { result: ContainmentResult.REJECTED, bindings: new Map() }]
                 ]),
@@ -357,6 +361,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -397,6 +402,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -437,6 +443,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -493,6 +500,7 @@ describe('solveShapeQueryContainment', () => {
             const shapes: IShape[] = [shape];
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -533,6 +541,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -574,6 +583,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -616,6 +626,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -658,6 +669,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -699,6 +711,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -738,6 +751,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -774,6 +788,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
                 ]),
@@ -810,6 +825,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
                 ]),
@@ -847,6 +863,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
                 ]),
@@ -884,6 +901,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
                 ]),
@@ -920,6 +938,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -967,7 +986,7 @@ describe('solveShapeQueryContainment', () => {
                 ["w", { result: ContainmentResult.UNALINGED, target: [shapeP3.name, shapeP4.name], bindings:expect.any(Map) }],
             ]);
             const expectedResult: IResult = {
-
+                result: ContainmentResult.UNALINGED,
                 starPatternsContainment: expectedStarPatternsContainment,
                 visitShapeBoundedResource: new Map([
                     [shape.name, true],
@@ -1007,6 +1026,7 @@ describe('solveShapeQueryContainment', () => {
                 ["w", { result: ContainmentResult.UNALINGED, target: [shapeP3.name, shapeP4.name], bindings:expect.any(Map) }],
             ]);
             const expectedResult: IResult = {
+                result: ContainmentResult.UNALINGED,
                 starPatternsContainment: expectedStarPatternsContainment,
                 visitShapeBoundedResource: new Map([
                     [shape.name, false],
@@ -1038,7 +1058,7 @@ describe('solveShapeQueryContainment', () => {
                 ["z", { result: ContainmentResult.CONTAINED, bindings:expect.any(Map), target: [shape.name] }],
             ]);
             const expectedResult: IResult = {
-
+                result: ContainmentResult.UNALINGED,
                 starPatternsContainment: expectedStarPatternsContainment,
                 visitShapeBoundedResource: new Map([
                     [shape.name, true],
@@ -1406,7 +1426,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-short-2', async () => {
@@ -1473,7 +1493,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-short-4', async () => {
@@ -1517,7 +1537,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-short-5', async () => {
@@ -1549,7 +1569,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
         });
 
@@ -1630,7 +1650,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-discover-2 comment missing', async () => {
@@ -1711,7 +1731,7 @@ describe('solveShapeQueryContainment', () => {
                     ["tag", { result: ContainmentResult.REJECTED, target: undefined, bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-discover-4', async () => {
@@ -1745,7 +1765,7 @@ describe('solveShapeQueryContainment', () => {
                     ["location", { result: ContainmentResult.REJECTED, target: undefined, bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-discover-5', async () => {
@@ -1772,7 +1792,7 @@ describe('solveShapeQueryContainment', () => {
                     ["message", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Comment", "http://example.com#Post"], bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             it('interactive-discover-6', async () => {
@@ -1808,7 +1828,7 @@ describe('solveShapeQueryContainment', () => {
                     ],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.UNALINGED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             it('interactive-discover-7', async () => {
@@ -1885,7 +1905,7 @@ describe('solveShapeQueryContainment', () => {
                     ["otherMessage", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Comment", "http://example.com#Post"], bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
         });
 
