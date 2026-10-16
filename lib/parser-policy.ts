@@ -1,4 +1,5 @@
-import { type IRdfListIndex, PoorlyFormatedShapeError, walkRdfList } from './Shape';
+import type * as RDF from '@rdfjs/types';
+import { type IRdfListIndex, PoorlyFormatedShapeError, type ShapeError, walkRdfList } from './Shape';
 
 export type ShapeFormat = 'shacl' | 'shex';
 
@@ -69,4 +70,24 @@ export function readRdfList(
     nodeId: head,
   });
   return strictRdfLists ? new PoorlyFormatedShapeError('An RDF list is poorly defined') : walked.values;
+}
+
+/**
+ * Pass every quad of a shapes graph, given as an array or as a stream, to `onQuad`. The promise
+ * resolves when all the quads are passed, with the error of the stream if it fails: the parsers
+ * return their errors rather than throw them.
+ */
+export function forEachQuad(
+  quads: RDF.Stream | RDF.Quad[],
+  onQuad: (quad: RDF.Quad) => void,
+): Promise<ShapeError | undefined> {
+  if (Array.isArray(quads)) {
+    quads.forEach(onQuad);
+    return Promise.resolve(undefined);
+  }
+  return new Promise(resolve => {
+    quads.on('data', onQuad);
+    quads.on('error', (error: ShapeError) => resolve(error));
+    quads.on('end', () => resolve(undefined));
+  });
 }

@@ -1,6 +1,4 @@
-import type * as RDFJS from '@rdfjs/types';
-import { RDF, SHACL, SHEX } from './constant';
-import type { IShapeParserOptions, ShapeFormat } from './parser-policy';
+import { RDF } from './constant';
 
 /**
  * A shape interface
@@ -536,102 +534,6 @@ export function isNegativeCardinality(minCount?: number, maxCount?: number): boo
   return minCount === 0 && maxCount === 0;
 }
 
-export interface IParseShapeFromQuadsOptions extends IShapeParserOptions {
-  format?: ShapeFormat | 'auto';
-}
-
-/**
- * Unified parser entrypoint for SHACL and ShEx shape graphs.
- */
-export async function parseShapeFromQuads(
-  quads: RDFJS.Stream | RDFJS.Quad[],
-  shapeIri: string,
-  options?: IParseShapeFromQuadsOptions,
-): Promise<IShape | ShapeError> {
-  const format = options?.format ?? 'auto';
-
-  if (Array.isArray(quads)) {
-    return parseFromArray(quads, shapeIri, format, options);
-  }
-
-  return new Promise(resolve => {
-    const buffer: RDFJS.Quad[] = [];
-    quads.on('data', (quad: RDFJS.Quad) => {
-      buffer.push(quad);
-    });
-    quads.on('error', (error: any) => {
-      resolve(error);
-    });
-    quads.on('end', () => {
-      parseFromArray(buffer, shapeIri, format, options).then(resolve);
-    });
-  });
-}
-
-async function parseFromArray(
-  quads: RDFJS.Quad[],
-  shapeIri: string,
-  requestedFormat: ShapeFormat | 'auto',
-  options?: IParseShapeFromQuadsOptions,
-): Promise<IShape | ShapeError> {
-  const format = requestedFormat === 'auto'
-    ? detectShapeFormat(quads)
-    : requestedFormat;
-
-  if (format === undefined) {
-    return new PoorlyFormatedShapeError('Cannot detect shape format automatically. Please provide options.format.');
-  }
-
-  if (format === 'shacl') {
-    const module = await import('./shacl');
-    return module.shaclShapeFromQuads(quads, shapeIri, options);
-  }
-
-  const module = await import('./shex');
-  return module.shexShapeFromQuads(quads, shapeIri, options);
-}
-
-function detectShapeFormat(quads: RDFJS.Quad[]): ShapeFormat | undefined {
-  let shaclScore = 0;
-  let shexScore = 0;
-
-  for (const quad of quads) {
-    if (
-      quad.predicate.equals(SHACL.terms.property)
-      || quad.predicate.equals(SHACL.terms.path)
-      || quad.predicate.equals(SHACL.terms.or)
-      || quad.predicate.equals(SHACL.terms.xone)
-      || quad.predicate.equals(SHACL.terms.node)
-      || quad.predicate.equals(SHACL.terms.datatype)
-      || quad.predicate.equals(SHACL.terms.targetNode)
-      || quad.predicate.equals(SHACL.terms.targetClass)
-      || quad.predicate.equals(SHACL.terms.targetSubjectsOf)
-      || quad.predicate.equals(SHACL.terms.targetObjectsOf)
-    ) {
-      shaclScore++;
-    }
-
-    if (
-      quad.predicate.equals(SHEX.terms.expression)
-      || quad.predicate.equals(SHEX.terms.expressions)
-      || quad.predicate.equals(SHEX.terms.predicate)
-      || quad.predicate.equals(SHEX.terms.valueExpr)
-      || quad.object.equals(SHEX.terms.Shape)
-      || quad.object.equals(SHEX.terms.EachOf)
-      || quad.object.equals(SHEX.terms.OneOf)
-    ) {
-      shexScore++;
-    }
-  }
-
-  if (shaclScore > shexScore) {
-    return 'shacl';
-  }
-  if (shexScore > shaclScore) {
-    return 'shex';
-  }
-  return undefined;
-}
 /**
  * An error to indicate that there is an inconsistency with the positive and negative properties
  */

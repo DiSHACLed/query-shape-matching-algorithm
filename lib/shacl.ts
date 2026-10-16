@@ -4,7 +4,7 @@ import type { OneOf, IShape, IPredicate, IConstraintDeclaration } from './Shape'
 import { PoorlyFormatedShapeError, buildConstraint, tryCreateShape, isNegativeCardinality, declaresTargets } from './Shape';
 import type { ShapeError, IShapeTargets } from './Shape';
 import { SHACL, RDF as RDF_VOCAB, RDFS, XSD } from './constant';
-import { addDiagnostic, type IRdfListContext, type IShapeParserOptions, readRdfList } from './parser-policy';
+import { addDiagnostic, forEachQuad, type IRdfListContext, type IShapeParserOptions, readRdfList } from './parser-policy';
 import { nodeTargetKey } from './target';
 
 const DF = new DataFactory();
@@ -86,213 +86,88 @@ function defaultMap(): IMapTripleShacl {
  * @param {string} shapeIri - The IRI of the desired node shape
  * @returns {Promise<IShape | ShapeError>} The parsed shape or an error
  */
-export function shaclShapeFromQuads(
+export async function shaclShapeFromQuads(
     quads: RDF.Stream | RDF.Quad[],
     shapeIri: string,
     options?: IShapeParserOptions,
 ): Promise<IShape | ShapeError> {
-    if (Array.isArray(quads)) {
-        return new Promise(resolve => {
-            resolve(shapeFromQuadArray(quads, shapeIri, options));
-        });
-    }
-    return shapeFromQuadStream(quads, shapeIri, options);
-}
-
-function shapeFromQuadStream(
-    quadStream: RDF.Stream,
-    shapeIri: string,
-    options?: IShapeParserOptions,
-): Promise<IShape | ShapeError> {
     const map = defaultMap();
-    return new Promise(resolve => {
-        quadStream.on('data', (quad: RDF.Quad) => { parseQuad(quad, map); });
-        quadStream.on('error', (error: any) => { resolve(error); });
-        quadStream.on('end', () => { resolve(buildShape(map, shapeIri, options)); });
-    });
-}
-
-function shapeFromQuadArray(
-    quads: RDF.Quad[],
-    shapeIri: string,
-    options?: IShapeParserOptions,
-): IShape | ShapeError {
-    const map = defaultMap();
-    for (const quad of quads) {
-        parseQuad(quad, map);
-    }
-    return buildShape(map, shapeIri, options);
+    const error = await forEachQuad(quads, quad => parseQuad(quad, map));
+    return error ?? buildShape(map, shapeIri, options);
 }
 
 // ── Quad parsing ───────────────────────────────────────────────────────────
 
-function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
-    const s = quad.subject.value;
-    const o = quad.object.value;
+type QuadHandler = (map: IMapTripleShacl, subject: string, object: RDF.Term) => void;
 
-    if (quad.predicate.value.startsWith(SHACL.namespace)) {
-        addToSetMap(map.shaclPredicates, s, quad.predicate.value);
-    }
+/** Set a field of the property shape data of the subject from the object. */
+function setPropertyData<K extends keyof IPropertyShapeData>(
+    key: K,
+    read: (object: RDF.Term) => IPropertyShapeData[K],
+): QuadHandler {
+    return (map, subject, object): void => {
+        getOrCreatePropData(map, subject)[key] = read(object);
+    };
+}
 
-    // sh:property  → register property shape under the node shape
-    if (quad.predicate.equals(SHACL.terms.property)) {
-        let props = map.shapeProperties.get(s);
-        if (props === undefined) {
-            props = new Set();
-            map.shapeProperties.set(s, props);
-        }
-        props.add(o);
-        // Ensure an entry exists so we can detect even empty property shapes
-        if (!map.propertyData.has(o)) {
-            map.propertyData.set(o, { isNegated: false });
-        }
-        return;
-    }
+const asNumber = (object: RDF.Term): number => Number(object.value);
+const asValue = (object: RDF.Term): string => object.value;
 
-    // sh:path  → predicate IRI for this property shape
-    if (quad.predicate.equals(SHACL.terms.path)) {
-        const data = getOrCreatePropData(map, s);
-        data.path = o;
-        data.pathIsIri = quad.object.termType === 'NamedNode';
-        return;
-    }
-
-    // sh:minCount
-    if (quad.predicate.equals(SHACL.terms.minCount)) {
-        getOrCreatePropData(map, s).minCount = Number(o);
-        return;
-    }
-
-    // sh:maxCount
-    if (quad.predicate.equals(SHACL.terms.maxCount)) {
-        getOrCreatePropData(map, s).maxCount = Number(o);
-        return;
-    }
-
-    // sh:minInclusive
-    if (quad.predicate.equals(SHACL.terms.minInclusive)) {
-        getOrCreatePropData(map, s).minInclusive = Number(o);
-        return;
-    }
-
-    // sh:maxInclusive
-    if (quad.predicate.equals(SHACL.terms.maxInclusive)) {
-        getOrCreatePropData(map, s).maxInclusive = Number(o);
-        return;
-    }
-
-    // sh:minExclusive
-    if (quad.predicate.equals(SHACL.terms.minExclusive)) {
-        getOrCreatePropData(map, s).minExclusive = Number(o);
-        return;
-    }
-
-    // sh:maxExclusive
-    if (quad.predicate.equals(SHACL.terms.maxExclusive)) {
-        getOrCreatePropData(map, s).maxExclusive = Number(o);
-        return;
-    }
-
-    // sh:pattern
-    if (quad.predicate.equals(SHACL.terms.pattern)) {
-        getOrCreatePropData(map, s).pattern = o;
-        return;
-    }
-
-    // sh:flags
-    if (quad.predicate.equals(SHACL.terms.flags)) {
-        getOrCreatePropData(map, s).flags = o;
-        return;
-    }
-
-    // sh:closed
-    if (quad.predicate.equals(SHACL.terms.closed)) {
-        map.closedShape.set(s, quad.object.equals(RDF_TRUE));
-        return;
-    }
-
-    // sh:class  → CLASS constraint
-    if (quad.predicate.equals(SHACL.terms.class)) {
-        getOrCreatePropData(map, s).classConstraint = o;
-        return;
-    }
-
-    // sh:datatype  → DATATYPE constraint
-    if (quad.predicate.equals(SHACL.terms.datatype)) {
-        getOrCreatePropData(map, s).datatypeConstraint = o;
-        return;
-    }
-
-    // sh:node  → SHAPE constraint (reference to another shape)
-    if (quad.predicate.equals(SHACL.terms.node)) {
-        getOrCreatePropData(map, s).shapeConstraint = o;
-        return;
-    }
-
-    // sh:or  → alternatives list head
-    if (quad.predicate.equals(SHACL.terms.or)) {
-        addToSetMap(map.orLists, s, o);
-        return;
-    }
-
-    // sh:xone  → exclusive-one-of list head  (treated same as sh:or for query matching)
-    if (quad.predicate.equals(SHACL.terms.xone)) {
-        addToSetMap(map.xoneLists, s, o);
-        return;
-    }
-
-    // sh:not  → negation (blank node property shape that should become a negative predicate)
-    if (quad.predicate.equals(SHACL.terms.not)) {
-        addToSetMap(map.notLinks, s, o);
-        // Create entry for the negated shape's blank node
-        const negData = getOrCreatePropData(map, o);
-        negData.isNegated = true;
-        return;
-    }
-
+/** What each predicate of a shapes graph records, by predicate IRI. */
+const QUAD_HANDLERS = new Map<string, QuadHandler>([
+    // sh:property registers a property shape under the node shape, even an empty one
+    [SHACL.property, (map, subject, object): void => {
+        addToSetMap(map.shapeProperties, subject, object.value);
+        getOrCreatePropData(map, object.value);
+    }],
+    [SHACL.path, (map, subject, object): void => {
+        const data = getOrCreatePropData(map, subject);
+        data.path = object.value;
+        data.pathIsIri = object.termType === 'NamedNode';
+    }],
+    [SHACL.minCount, setPropertyData('minCount', asNumber)],
+    [SHACL.maxCount, setPropertyData('maxCount', asNumber)],
+    [SHACL.minInclusive, setPropertyData('minInclusive', asNumber)],
+    [SHACL.maxInclusive, setPropertyData('maxInclusive', asNumber)],
+    [SHACL.minExclusive, setPropertyData('minExclusive', asNumber)],
+    [SHACL.maxExclusive, setPropertyData('maxExclusive', asNumber)],
+    [SHACL.pattern, setPropertyData('pattern', asValue)],
+    [SHACL.flags, setPropertyData('flags', asValue)],
+    [SHACL.class, setPropertyData('classConstraint', asValue)],
+    [SHACL.datatype, setPropertyData('datatypeConstraint', asValue)],
+    // sh:node references another shape
+    [SHACL.node, setPropertyData('shapeConstraint', asValue)],
+    [SHACL.closed, (map, subject, object): void => { map.closedShape.set(subject, object.equals(RDF_TRUE)); }],
+    // sh:or and sh:xone are list heads of alternatives (sh:xone is treated as sh:or for query matching)
+    [SHACL.or, (map, subject, object): void => { addToSetMap(map.orLists, subject, object.value); }],
+    [SHACL.xone, (map, subject, object): void => { addToSetMap(map.xoneLists, subject, object.value); }],
+    // sh:not negates a property shape, which can become a negative predicate
+    [SHACL.not, (map, subject, object): void => {
+        addToSetMap(map.notLinks, subject, object.value);
+        getOrCreatePropData(map, object.value).isNegated = true;
+    }],
     // Targets: the nodes the shape describes when it is used on its own
-    if (quad.predicate.equals(SHACL.terms.targetNode)) {
-        getOrCreateTargets(map, s).nodes.add(nodeTargetKey(quad.object));
-        return;
-    }
-    if (quad.predicate.equals(SHACL.terms.targetClass)) {
-        getOrCreateTargets(map, s).classes.add(o);
-        return;
-    }
-    if (quad.predicate.equals(SHACL.terms.targetSubjectsOf)) {
-        getOrCreateTargets(map, s).subjectsOf.add(o);
-        return;
-    }
-    if (quad.predicate.equals(SHACL.terms.targetObjectsOf)) {
-        getOrCreateTargets(map, s).objectsOf.add(o);
-        return;
-    }
-
-    // sh:ignoredProperties  → list of properties a closed shape allows without declaring them
-    if (quad.predicate.equals(SHACL.terms.ignoredProperties)) {
-        map.ignoredLists.set(s, o);
-        return;
-    }
-
+    [SHACL.targetNode, (map, subject, object): void => { getOrCreateTargets(map, subject).nodes.add(nodeTargetKey(object)); }],
+    [SHACL.targetClass, (map, subject, object): void => { getOrCreateTargets(map, subject).classes.add(object.value); }],
+    [SHACL.targetSubjectsOf, (map, subject, object): void => { getOrCreateTargets(map, subject).subjectsOf.add(object.value); }],
+    [SHACL.targetObjectsOf, (map, subject, object): void => { getOrCreateTargets(map, subject).objectsOf.add(object.value); }],
+    // sh:ignoredProperties lists the properties a closed shape allows without declaring them
+    [SHACL.ignoredProperties, (map, subject, object): void => { map.ignoredLists.set(subject, object.value); }],
     // rdf:type and rdfs:subClassOf, to recognize a shape that is also a class (implicit class target)
-    if (quad.predicate.equals(RDF_VOCAB.terms.type)) {
-        addToSetMap(map.types, s, o);
-        return;
-    }
-    if (quad.predicate.equals(RDFS.terms.subClassOf)) {
-        addToSetMap(map.superClasses, s, o);
-        return;
-    }
+    [RDF_VOCAB.type, (map, subject, object): void => { addToSetMap(map.types, subject, object.value); }],
+    [RDFS.subClassOf, (map, subject, object): void => { addToSetMap(map.superClasses, subject, object.value); }],
+    // rdf:first and rdf:rest of the RDF lists
+    [RDF_VOCAB.first, (map, subject, object): void => { map.listFirst.set(subject, object.value); }],
+    [RDF_VOCAB.rest, (map, subject, object): void => { map.listRest.set(subject, object.value); }],
+]);
 
-    // rdf:first / rdf:rest for RDF lists (used by sh:or / sh:xone)
-    if (quad.predicate.equals(RDF_VOCAB.terms.first)) {
-        map.listFirst.set(s, o);
-        return;
+function parseQuad(quad: RDF.Quad, map: IMapTripleShacl): void {
+    const subject = quad.subject.value;
+    const predicate = quad.predicate.value;
+    if (predicate.startsWith(SHACL.namespace)) {
+        addToSetMap(map.shaclPredicates, subject, predicate);
     }
-    if (quad.predicate.equals(RDF_VOCAB.terms.rest)) {
-        map.listRest.set(s, o);
-        return;
-    }
+    QUAD_HANDLERS.get(predicate)?.(map, subject, quad.object);
 }
 
 function getOrCreateTargets(map: IMapTripleShacl, shapeIri: string): IShapeTargetSets {

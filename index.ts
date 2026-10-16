@@ -9,3 +9,4 @@ export * from './lib/Triple';
 export * from './lib/Binding';
 export * from './lib/target';
 export * from './lib/parser-policy';
+export * from './lib/shape-parser';

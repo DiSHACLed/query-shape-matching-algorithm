@@ -10,7 +10,7 @@ import type {
   IConstraintFacets,
 } from './Shape';
 import { PoorlyFormatedShapeError, tryCreateShape, buildConstraint, isNegativeCardinality } from './Shape';
-import { type IShapeParserOptions, readRdfList } from './parser-policy';
+import { forEachQuad, type IShapeParserOptions, readRdfList } from './parser-policy';
 
 const DF = new DataFactory();
 const RDF_TRUE = DF.literal('true', DF.namedNode(XSD.boolean));
@@ -22,80 +22,14 @@ const RDF_TRUE = DF.literal('true', DF.namedNode(XSD.boolean));
  * @returns {Promise<IShape | ShapeError>} The shape
  * @todo support for `OR` statement
  */
-export function shexShapeFromQuads(
+export async function shexShapeFromQuads(
   quads: RDF.Stream | RDF.Quad[],
   shapeIri: string,
   options?: IShapeParserOptions,
 ): Promise<IShape | ShapeError> {
-  if (Array.isArray(quads)) {
-    return new Promise(resolve => {
-      resolve(shapeFromQuadArray(quads, shapeIri, options));
-    });
-  }
-  return shapeFromQuadStream(quads, shapeIri, options);
-}
-
-/**
- * Parse a Shex shape from a quad stream
- * @param {RDF.Stream} quads - Quads representing a shape
- * @param {string} shapeIri - The iri of the desired shape
- * @returns {Promise<IShape | ShapeError>} The shape
- */
-function shapeFromQuadStream(
-  quadSteam: RDF.Stream,
-  shapeIri: string,
-  options?: IShapeParserOptions,
-): Promise<IShape | ShapeError> {
-  const mapTripleShex: IMapTripleShex = defaultMapTripleShex();
-
-  return new Promise(resolve => {
-    quadSteam.on('data', (quad: RDF.Quad) => {
-      parseShapeQuads(
-        quad,
-        mapTripleShex,
-      );
-    });
-
-    quadSteam.on('error', (error: any) => {
-      resolve(error);
-    });
-    quadSteam.on('end', () => {
-      const shape = concatShapeInfo(
-        mapTripleShex,
-        shapeIri,
-        options,
-      );
-      resolve(shape);
-    });
-  });
-}
-
-/**
- * Parse a Shex shape from an array of quad
- * @param {RDF.Quad[]} quads - Quads representing a shape
- * @param {string} shapeIri - The iri of the desired shape
- * @returns {Promise<IShape | ShapeError>} The shape
- */
-function shapeFromQuadArray(
-  quads: RDF.Quad[],
-  shapeIri: string,
-  options?: IShapeParserOptions,
-): IShape | ShapeError {
-  const mapTripleShex: IMapTripleShex = defaultMapTripleShex();
-
-  for (const quad of quads) {
-    parseShapeQuads(
-      quad,
-      mapTripleShex,
-    );
-  }
-
-  const shape = concatShapeInfo(
-    mapTripleShex,
-    shapeIri,
-    options,
-  );
-  return shape;
+  const mapTripleShex = defaultMapTripleShex();
+  const error = await forEachQuad(quads, quad => parseShapeQuads(quad, mapTripleShex));
+  return error ?? concatShapeInfo(mapTripleShex, shapeIri, options);
 }
 
 /**

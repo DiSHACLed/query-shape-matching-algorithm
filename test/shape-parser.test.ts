@@ -2,7 +2,7 @@ import { readFileSync } from 'fs';
 import type * as RDF from '@rdfjs/types';
 import * as N3 from 'n3';
 import { describe, expect, it } from 'vitest';
-import { parseShapeFromQuads } from '../lib/Shape';
+import { parseShapeFromQuads } from '../lib/shape-parser';
 import type { IShape } from '../lib/Shape';
 import type { ParserDiagnostic } from '../lib/parser-policy';
 
