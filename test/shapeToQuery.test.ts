@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConstraintType, type IShape, Shape } from '../lib/Shape';
-import { shapeToQuery } from '../lib/query';
+import { shapeToQuery } from '../lib/shapeToQuery';
 import { solveShapeQueryContainment, ContainmentResult } from '../lib/containment';
 import { RDF } from '../lib/constant';
 

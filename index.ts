@@ -1,5 +1,6 @@
 export * from './lib/constant';
 export * from './lib/query';
+export * from './lib/shapeToQuery';
 export * from './lib/shex';
 export * from './lib/shacl';
 export * from './lib/containment';

@@ -4,7 +4,8 @@ import * as N3 from 'n3';
 import { describe, expect, it } from 'vitest';
 import type { IShape } from '../lib/Shape';
 import { shaclShapeFromQuads } from '../lib/shacl';
-import { generateQuery, shapeToQuery, type IQuery } from '../lib/query';
+import { generateQuery, type IQuery } from '../lib/query';
+import { shapeToQuery } from '../lib/shapeToQuery';
 import { ContainmentResult, solveShapeQueryContainment, solveShapeShapeContainment } from '../lib/containment';
 import { RDF } from '../lib/constant';
 
