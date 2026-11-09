@@ -277,7 +277,7 @@ describe('Shape', () => {
     const shape = new Shape({ name: 'foo', positivePredicates, negativePredicates });
 
     it('should get all predicates', () => {
-      // eslint-disable-next-line @typescript-eslint/require-array-sort-compare
+       
       const expectedPredicates = [
         { name: 'a' },
         {
@@ -295,7 +295,7 @@ describe('Shape', () => {
         { name: 'f', negative: true },
       ].sort();
 
-      // eslint-disable-next-line @typescript-eslint/require-array-sort-compare
+       
       expect(shape.getAll().sort()).toStrictEqual(expectedPredicates);
     });
 

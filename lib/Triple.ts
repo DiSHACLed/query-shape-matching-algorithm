@@ -9,6 +9,17 @@ export interface IStarPatternWithDependencies {
   starPattern: Map<string, ITripleWithDependencies>;
   name: string;
   isVariable: boolean;
+  /**
+   * Predicates the subject must not carry: negated triple patterns from a `FILTER NOT EXISTS` or
+   * `MINUS` over a single triple pattern, or negative predicates of an input shape.
+   */
+  excludedPredicates?: Set<string>;
+  /**
+   * The constants the subject is one of, when the star pattern is about given nodes only: the node
+   * targets (sh:targetNode) of an input shape. A star pattern whose subject is a constant in the
+   * query does not need it; its name is that constant.
+   */
+  subjectValues?: Set<string>;
 }
 
 export interface ITripleWithDependencies {
@@ -116,8 +127,13 @@ export class Triple implements ITriple {
     return tripleObject;
   }
 
+  /**
+   * The subject of the star pattern the object can lead to. A literal leads to none; a blank node of a
+   * pattern behaves as a variable, so it leads to the star pattern it is the subject of.
+   */
   public getLinkedStarPattern(): string | undefined {
-    if (!Array.isArray(this.object) && (this.object?.termType === "Variable" || this.object?.termType === "NamedNode")) {
+    if (!Array.isArray(this.object) && (this.object?.termType === "Variable" || this.object?.termType === "NamedNode"
+      || this.object?.termType === "BlankNode")) {
       return this.object.value
     }
   }

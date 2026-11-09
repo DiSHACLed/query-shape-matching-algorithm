@@ -1,3 +1,6 @@
+import { RDF } from './constant';
+import type { UnsupportedConstruct } from './query';
+
 /**
  * A shape interface
  */
@@ -27,8 +30,13 @@ export interface IShape extends IShapeObj {
    * @returns {Set<string>} - IRIs of the shape necessary for the constraint
    */
   getLinkedShapeIri: () => Set<string>;
+  // A shape always has the fields that its serialized form leaves out when they are empty
+  negativePredicates: string[];
   oneOf: OneOf[];
   oneOfIndexed: OneOfIndexed[];
+  targets: IShapeTargets;
+  ignoredProperties: string[];
+  unsupported: UnsupportedConstruct[];
 }
 
 /**
@@ -54,17 +62,32 @@ export type IPredicateJson = Omit<IPredicate, "constraint"> & {
 }
 
 /**
- * A constraint
+ * The numeric and string facets that restrict the literal values of a datatype constraint
  */
-export interface IConstraint {
-  value: Set<string>;
-  type: ConstraintType;
+export interface IConstraintFacets {
   minInclusive?: number;
   maxInclusive?: number;
   minExclusive?: number;
   maxExclusive?: number;
   pattern?: string;
   flags?: string;
+}
+
+const FACET_KEYS: (keyof IConstraintFacets)[] = [
+  'minInclusive',
+  'maxInclusive',
+  'minExclusive',
+  'maxExclusive',
+  'pattern',
+  'flags',
+];
+
+/**
+ * A constraint
+ */
+export interface IConstraint extends IConstraintFacets {
+  value: Set<string>;
+  type: ConstraintType;
 }
 
 function toJsonConstraint(constraint: IConstraint): IConstraintJson {
@@ -98,11 +121,30 @@ export type IShapeJson = Omit<IShapeObj, "positivePredicates" | "negativePredica
 export const enum ConstraintType {
   // Is bound to another shape
   SHAPE,
-  // Is bound by a class IRI (typically object is a NamedNode)
+  // The value is one of the IRIs, compared by IRI: the class of rdf:type that a class target implies,
+  // or a ShEx value set on rdf:type
   CLASS,
   // Is bound by a literal datatype IRI
   DATATYPE,
+  // The value is a SHACL instance of the class (sh:class), which only the data decides
+  INSTANCE,
 }
+/**
+ * The SHACL targets of a shape: the nodes it describes when it is used on its own. SHACL ignores
+ * them when the shape is reached through `sh:node`. A shape with no target at all is treated as
+ * describing any node.
+ */
+export interface IShapeTargets {
+  // sh:targetNode values, as keys made by nodeTargetKey: an IRI is its value
+  nodes: string[];
+  // sh:targetClass values, and the shape itself when it is also an rdfs:Class (implicit class target)
+  classes: string[];
+  // sh:targetSubjectsOf values
+  subjectsOf: string[];
+  // sh:targetObjectsOf values
+  objectsOf: string[];
+}
+
 /**
  * A simple Shape object
  */
@@ -112,6 +154,12 @@ export interface IShapeObj {
   positivePredicates: string[];
   negativePredicates?: string[];
   oneOf?: OneOf[];
+  // only present when the shape declares at least one target
+  targets?: IShapeTargets;
+  // sh:ignoredProperties of a closed shape; only present when there is at least one
+  ignoredProperties?: string[];
+  // constructs of the shapes graph the shape could not represent; only present when there is one
+  unsupported?: UnsupportedConstruct[];
 }
 
 /**
@@ -124,6 +172,9 @@ export interface IShapeArgs {
   linkedShapeIri?: string[]
   closed?: boolean;
   oneOf?: OneOf[];
+  targets?: Partial<IShapeTargets>;
+  ignoredProperties?: string[];
+  unsupported?: UnsupportedConstruct[];
 }
 
 export type OneOf = OneOfPath[];
@@ -161,15 +212,26 @@ export class Shape implements IShape {
   private readonly predicates = new Map<string, IPredicate>();
   public readonly oneOf: OneOf[];
   public readonly oneOfIndexed: OneOfIndexed[] = [];
+  public readonly targets: IShapeTargets;
+  public readonly ignoredProperties: string[];
+  public readonly unsupported: UnsupportedConstruct[];
 
   /**
    *
    * @param {IShapeArgs} args - The argument to build a shape
    */
-  public constructor({ name, positivePredicates, negativePredicates, closed, oneOf }: IShapeArgs) {
+  public constructor({ name, positivePredicates, negativePredicates, closed, oneOf, targets, ignoredProperties, unsupported }: IShapeArgs) {
     this.name = name;
     this.closed = closed ?? false;
     this.oneOf = oneOf ? oneOf : [];
+    this.targets = {
+      nodes: [...targets?.nodes ?? []],
+      classes: [...targets?.classes ?? []],
+      subjectsOf: [...targets?.subjectsOf ?? []],
+      objectsOf: [...targets?.objectsOf ?? []],
+    };
+    this.ignoredProperties = [...ignoredProperties ?? []];
+    this.unsupported = [...new Set(unsupported)];
     const linkedShapeIri = new Set<string>();
     for (const oneOf of this.oneOf) {
       const currentOneOf: OneOfIndexed = [];
@@ -247,6 +309,12 @@ export class Shape implements IShape {
     Object.freeze(this.closed);
     Object.freeze(this.oneOf);
     Object.freeze(this.oneOfIndexed);
+    for (const values of Object.values(this.targets)) {
+      Object.freeze(values);
+    }
+    Object.freeze(this.targets);
+    Object.freeze(this.ignoredProperties);
+    Object.freeze(this.unsupported);
     Object.freeze(this);
   }
 
@@ -266,13 +334,23 @@ export class Shape implements IShape {
   }
 
   public toObject(): IShapeObj {
-    return {
+    const obj: IShapeObj = {
       name: this.name,
       closed: this.closed,
       positivePredicates: this.positivePredicates,
       negativePredicates: this.negativePredicates,
       oneOf: this.oneOf
     };
+    if (declaresTargets(this.targets)) {
+      obj.targets = this.targets;
+    }
+    if (this.ignoredProperties.length > 0) {
+      obj.ignoredProperties = this.ignoredProperties;
+    }
+    if (this.unsupported.length > 0) {
+      obj.unsupported = this.unsupported;
+    }
+    return obj;
   }
 
   public toJson():  IShapeJson{
@@ -322,6 +400,155 @@ export class Shape implements IShape {
     return this.linkedShapeIri;
   }
 }
+
+export interface IRdfListIndex {
+  firstByNode: Map<string, string>;
+  restByNode: Map<string, string>;
+}
+
+export interface IRdfListWalkResult {
+  values: string[];
+  malformed: boolean;
+  cycleDetected: boolean;
+}
+
+/**
+ * Walk an RDF collection linked with rdf:first / rdf:rest.
+ *
+ * Returns all list member values found from `head` until rdf:nil.
+ * If the collection is malformed, traversal stops and marks `malformed`.
+ */
+export function walkRdfList(
+  head: string,
+  index: IRdfListIndex,
+): IRdfListWalkResult {
+  const values: string[] = [];
+  const visited = new Set<string>();
+
+  let malformed = false;
+  let cycleDetected = false;
+  let current: string | undefined = head;
+
+  while (true) {
+    if (current === undefined || current === RDF.nil) {
+      break;
+    }
+
+    if (visited.has(current)) {
+      cycleDetected = true;
+      malformed = true;
+      break;
+    }
+    visited.add(current);
+
+    const value = index.firstByNode.get(current);
+    const next = index.restByNode.get(current);
+    if (value === undefined || next === undefined) {
+      malformed = true;
+      break;
+    }
+
+    values.push(value);
+    current = next;
+  }
+
+  return {
+    values,
+    malformed,
+    cycleDetected,
+  };
+}
+
+/**
+ * What a shapes graph declares about the values of a property: a class, a shape or a datatype, and
+ * the facets of the datatype.
+ */
+export interface IConstraintDeclaration extends IConstraintFacets {
+  classConstraint?: string;
+  shapeConstraint?: string;
+  datatypeConstraint?: string;
+}
+
+/**
+ * Build the constraint of a property from its declaration. A class takes precedence over a shape,
+ * and a shape over a datatype. A datatype on rdf:type names a class.
+ */
+export function buildConstraint(declaration: IConstraintDeclaration, predicateName: string): IConstraint | undefined {
+  if (declaration.classConstraint !== undefined) {
+    return { value: new Set([declaration.classConstraint]), type: ConstraintType.INSTANCE };
+  }
+  if (declaration.shapeConstraint !== undefined) {
+    return { value: new Set([declaration.shapeConstraint]), type: ConstraintType.SHAPE };
+  }
+  if (declaration.datatypeConstraint === undefined) {
+    return undefined;
+  }
+  if (predicateName === RDF.type) {
+    return { value: new Set([declaration.datatypeConstraint]), type: ConstraintType.CLASS };
+  }
+  return { value: new Set([declaration.datatypeConstraint]), type: ConstraintType.DATATYPE, ...definedFacets(declaration) };
+}
+
+function definedFacets(facets: IConstraintFacets): IConstraintFacets {
+  const defined: IConstraintFacets = {};
+  for (const key of FACET_KEYS) {
+    if (facets[key] !== undefined) {
+      Object.assign(defined, { [key]: facets[key] });
+    }
+  }
+  return defined;
+}
+
+/**
+ * Build a shape, returning the error instead of throwing it when the shape is inconsistent.
+ */
+export function tryCreateShape(args: IShapeArgs): IShape | ShapeError {
+  try {
+    return new Shape(args);
+  } catch (error: unknown) {
+    if (error instanceof InconsistentPositiveAndNegativePredicateError) {
+      return error;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Whether there is at least one target.
+ */
+export function declaresTargets(targets: IShapeTargets): boolean {
+  return Object.values(targets).some(values => values.length > 0);
+}
+
+const TARGETLESS_SHAPES = new WeakMap<IShape, IShape>();
+
+/**
+ * The shape as SHACL applies it when the shape is reached through sh:node: without its targets.
+ */
+export function withoutTargets(shape: IShape): IShape {
+  if (!declaresTargets(shape.targets)) {
+    return shape;
+  }
+  let targetless = TARGETLESS_SHAPES.get(shape);
+  if (targetless === undefined) {
+    targetless = new Shape({
+      name: shape.name,
+      positivePredicates: shape.positivePredicates.map(predicate => shape.get(predicate) ?? predicate),
+      negativePredicates: shape.negativePredicates.map(predicate => shape.get(predicate) ?? predicate),
+      closed: shape.closed,
+      oneOf: shape.oneOf,
+      ignoredProperties: shape.ignoredProperties,
+      unsupported: shape.unsupported,
+    });
+    TARGETLESS_SHAPES.set(shape, targetless);
+  }
+  return targetless;
+}
+
+export function isNegativeCardinality(minCount?: number, maxCount?: number): boolean {
+  return minCount === 0 && maxCount === 0;
+}
+
 /**
  * An error to indicate that there is an inconsistency with the positive and negative properties
  */

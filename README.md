@@ -1,4 +1,5 @@
 # query-shape-matching-algorithm
+[![CI](https://github.com/DiSHACLed/query-shape-matching-algorithm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/DiSHACLed/query-shape-matching-algorithm/actions/workflows/ci.yml)
 [![npm version](https://badge.fury.io/js/query-shape-matching.svg)](https://www.npmjs.com/package/query-shape-matching)
 
 Reference implementation for the query/shape matching algorithm described in the discovery specification.
@@ -11,6 +12,9 @@ It is implemented as a Node.js library to calculate the containment (subsumption
 - **Star Pattern Decomposition**: Breaks down complex SPARQL queries into star patterns (groups of triple patterns sharing the same subject).
 - **Alignment Detection**: Identifies how closely a query matches the constraints defined in a shape.
 - **Dependency Tracking**: Handles links between shapes, detecting when a star pattern depends on another to be fully bounded.
+- **Explicit Negation**: A predicate forbidden by SHACL `sh:not [ sh:path p ; sh:minCount 1 ]` or limited by `sh:maxCount 0` (or a ShEx negative triple constraint) never matches. Because such a shape states that the property must be absent, a query needing it is `REJECTED` even when the shape is open. A `sh:not` with any other parameter forbids nothing (`sh:not [ sh:path p ; sh:minCount 2 ]` allows one value), so it is ignored and reported as an `UNSUPPORTED_NOT` parser diagnostic.
+- **Negated Triple Patterns**: A `FILTER NOT EXISTS` or `MINUS` over a single triple pattern `?s p ?o` (with `?s` bound by a required triple pattern and `?o` fresh) states that `?s` must not carry `p`. A shape that requires `p` (`sh:minCount` of at least 1) contradicts it, so the star pattern is `REJECTED` even when the shape is open. A `sh:not` of an input shape is translated the same way.
+- **SHACL Targets**: `sh:targetNode`, `sh:targetClass` (including implicit class targets), `sh:targetSubjectsOf` and `sh:targetObjectsOf` say which nodes a shape describes. The targets of a source shape become patterns about its focus node; the targets of a candidate shape are matched, and limit which star patterns its closedness can reject. See [Targets](#targets).
 
 ## How it Works
 
@@ -26,9 +30,9 @@ npm install query-shape-detection
 yarn add query-shape-detection
 ```
 
-## Example Code
+## Code examples
 
-### Simple SHACL Example
+### SPARQL-to-SHACL Example
 
 ```ts
 import { 
@@ -69,17 +73,87 @@ const report = solveShapeQueryContainment({
     shapes: [personShape],
 });
 
-console.log(report.starPatternsContainment.get("person"));
+// 4. Read the global result for the complete query.
+console.log(report.result); // ContainmentResult.CONTAINED
+
+// 5. Inspect how the global result was obtained by checking every query star pattern.
+for (const [starPatternName, containment] of report.starPatternsContainment) {
+  console.log(starPatternName);       // "person"
+  console.log(containment.result);    // ContainmentResult.CONTAINED
+  console.log(containment.target);    // ["http://example.org/PersonShape"]
+  console.log(containment.bindings);  // Detailed predicate/dependency matches
+}
 ```
 
-### Simple ShEx Example
+`report.result` is the aggregate result for the complete query. It is
+`CONTAINED` only when every star pattern is also `CONTAINED`; otherwise it reports the most restrictive result among the star patterns.
+
+### Shape-to-Shape Example
+
+You can compare a source shape against candidate target shapes directly using
+`solveShapeShapeContainment`. Internally, this uses a shape-to-query translation and then reuses the existing query-to-shape containment engine.
 
 ```ts
-import { shexShapeFromQuads } from 'query-shape-detection';
+import {
+  shaclShapeFromQuads,
+  solveShapeShapeContainment,
+} from 'query-shape-detection';
+import * as N3 from 'n3';
 
-// Parsing a ShEx shape follows the same pattern
-const shexQuads = /* RDF quads from ShEx definition */;
-const personShape = await shexShapeFromQuads(shexQuads, "http://example.org/PersonShape");
+const sourceShapeRaw = `
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix ex: <https://www.example.org/> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  ex:SourceShape a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+      sh:path ex:age ;
+      sh:datatype xsd:integer ;
+      sh:minInclusive 18 ;
+      sh:maxInclusive 35
+    ] .
+`;
+
+const targetShapeRaw = `
+  @prefix sh: <http://www.w3.org/ns/shacl#> .
+  @prefix ex: <https://www.example.org/> .
+  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+  ex:TargetShape a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [
+      sh:path ex:age ;
+      sh:datatype xsd:integer ;
+      sh:minInclusive 10 ;
+      sh:maxInclusive 40
+    ] .
+`;
+
+const sourceShape = await shaclShapeFromQuads(
+  new N3.Parser().parse(sourceShapeRaw),
+  'https://www.example.org/SourceShape',
+);
+const targetShape = await shaclShapeFromQuads(
+  new N3.Parser().parse(targetShapeRaw),
+  'https://www.example.org/TargetShape',
+);
+
+const report = solveShapeShapeContainment({
+  sourceShape,
+  targetShapes: [targetShape],
+});
+
+// Read the global result for the complete source-shape/target-shape comparison.
+console.log(report.result); // ContainmentResult.CONTAINED
+
+// Inspect the individual result for every star pattern generated from the source shape.
+for (const [starPatternName, containment] of report.starPatternsContainment) {
+  console.log(starPatternName);
+  console.log(containment.result);    // ContainmentResult.CONTAINED
+  console.log(containment.target);    // ["https://www.example.org/TargetShape"]
+  console.log(containment.bindings);  // Detailed predicate/dependency matches
+}
 ```
 
 ## Containment Results
@@ -88,11 +162,87 @@ The library returns a report where each star pattern is assigned one of the foll
 
 | Result             | Description |
 | :----------------- | :---------- |
-| **`CONTAINED`**    | All query star patterns, including nested ones, are matched by the shape. |
+| **`CONTAINED`**    | Every *required* triple pattern of every star pattern, including nested ones, is matched by the shape. Unmatched `OPTIONAL` patterns do not prevent this. |
 | **`ALIGNED`**      | At least one triple pattern from the root star pattern matches on an open shape. |
-| **`UNALINGED`**    | Partial root star pattern match on a closed shape; or match on a nested star pattern while having no match on root star pattern. |
-| **`WEAKLY_REJECTED`** | None of the triple patterns match on an open shape. |
-| **`REJECTED`**     | None of the triple patterns match on a closed shape. |
+| **`UNALINGED`**    | Partial root star pattern match on a closed shape; or match on a nested star pattern while having no match on root star pattern. A predicate the shape declares but whose `sh:node` dependency could not be established counts as such a partial match. |
+| **`WEAKLY_REJECTED`** | No triple pattern matches, and at least one candidate shape that describes the pattern is open and does not forbid the predicates involved, or no candidate shape describes it (see [Targets](#targets)). |
+| **`REJECTED`**     | No triple pattern matches, and every shape that describes the pattern (at least one) either is closed or explicitly forbids a required predicate through `sh:not` or `sh:maxCount 0`. Also returned when there is no candidate shape. |
+
+### Nested dependencies
+
+A predicate constrained by `sh:node` is only fully bound when the nested star pattern is
+bound by the referenced shape. When it is not, the outcome depends on *why*:
+
+- the referenced shape is **closed** and does not declare what the nested pattern asks
+  for, so it forbids it. The dependency is refuted, the predicate does not match, and the
+  root pattern can be `REJECTED`. This is what lets a closed shape graph prune.
+- the referenced shape is **open** and merely silent about it. Nothing is refuted: data
+  conforming to that shape may well carry the predicate. The root predicate still matched
+  the referring shape, so the root pattern is a partial match — `UNALINGED` on a closed
+  referring shape, `ALIGNED` on an open one — and never `REJECTED`.
+
+A shape reached only through `sh:node` also governs the nested star pattern it resolves,
+so that pattern is classified against it even when the shape is passed as a
+`dependentShapes` entry rather than a candidate. Both placements give the same
+classification. This applies regardless of `decidingShapes`: role filtering chooses which
+shapes may decide a resource's relevance, not which shape governs a pattern inside the
+shape graph. Only references reached from a candidate count, though: a shape excluded by
+`decidingShapes` lends no evidence through `sh:node` references of its own.
+
+`OPTIONAL` triple patterns are never required for containment: a resource can answer
+the query without them. The rule is the same for open and closed shapes, so adding
+`sh:closed true` to a shape never raises its result.
+
+A source shape follows the cardinality semantics of its language. In SHACL, an absent
+`sh:minCount` is 0 and an absent `sh:maxCount` is unbounded, so a property constraint
+without `sh:minCount` becomes an optional triple pattern. In ShEx, a triple constraint
+without a cardinality occurs exactly once, so it becomes a required one.
+
+### Targets
+
+The SHACL targets of a shape (`IShape.targets`: `nodes`, `classes`, `subjectsOf`, `objectsOf`)
+say which nodes it describes when it is used on its own. A shape that is also an
+`rdfs:Class` (or an instance of a class declared a subclass of `rdfs:Class` in the shapes
+graph) targets its own instances. SHACL ignores targets when a shape is reached through
+`sh:node`, and so does this library, on both sides.
+
+**Source shapes.** `shapeToQuery` translates the targets of the given shape into patterns
+about its focus node:
+
+- a class target requires `rdf:type` with the class as value, and a subjects-of target
+  requires its predicate;
+- node targets restrict the subject of the focus star pattern to the target nodes
+  (`IStarPatternWithDependencies.subjectValues`);
+- an objects-of target `p` adds a star pattern `?s p <focus>` that depends on the focus
+  star pattern;
+- several class and subjects-of targets become the branches of a UNION, as the branches
+  of an `sh:or` do, so a resource contains the shape only when every alternative is
+  covered.
+
+Node and objects-of targets combined with other targets, or several objects-of targets,
+cannot be represented: they are ignored and reported as `TARGETS` in `unsupported`, which
+can only over-estimate relevance. A shape without constraints whose targets are node
+targets asks for any triple about those nodes, and sets `matchesAnyTriple`.
+
+**Candidate shapes.** A target implies constraints that the shape does not declare: a
+class target implies `rdf:type` with a target class as value (matched by IRI, without
+subclass reasoning), and a subjects-of target implies its predicate. They match like
+declared constraints, and a closed shape does not forbid them. Since the focus nodes are
+the union of the nodes of the targets, an implied constraint is only required — for
+negated triple patterns — when every focus node carries it: when all the targets are
+class targets, or the only target is one subjects-of target. A closed shape also allows
+its `sh:ignoredProperties`. A shape whose only targets are node targets describes those
+nodes and nothing else, so it cannot contain a star pattern about another constant
+subject.
+
+A shape without targets describes every star pattern, as before. A shape with targets
+only constrains the nodes of its targets, so its closedness and negative constraints
+count only for a star pattern whose matching nodes are all in a target: its subject is a
+node target, it requires `rdf:type` with target classes only, it requires the predicate
+of a subjects-of target, or it is reached through a required triple pattern whose
+predicate is that of an objects-of target. For any other star pattern the shape neither
+supports nor softens a rejection, and its matches count as on an open shape. A closed
+shape targeting persons therefore does not reject a query about places.
 
 ### Examples of Containment Results
 
@@ -152,9 +302,7 @@ Another `CONTAINED` case combines a FILTER expression with compatible shape cons
   ```
 
 Containment decisions do not use runtime FILTER truth values directly.
-Instead, FILTER expressions are only used when they can be checked against shape constraints.
-For example, a numeric comparison like `?age > 18` is compatible with an `xsd:integer` constraint,
-but can contradict a non-numeric datatype constraint.
+Instead, FILTER expressions are only used when they can be checked against shape constraints. For example, a numeric comparison like `?age > 18` is compatible with an `xsd:integer` constraint, but can contradict a non-numeric datatype constraint.
 
 #### 2. `ALIGNED`
 
@@ -256,17 +404,19 @@ Another `UNALINGED` case is when the root star pattern does not match, but a nes
     sh:property [ sh:path foaf:name ] .
   ```
 
-Another `UNALINGED` case with FILTER and constraints:
+Another `UNALINGED` case occurs when the root pattern does not match, but an
+optional nested star pattern reachable through a linked variable does.
 
 * **Query**:
 
   ```sparql
-  PREFIX ex: <https://www.example.ca/>
-  PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+  PREFIX ex: <http://example.org/>
+  PREFIX foaf: <http://xmlns.com/foaf/0.1/>
   SELECT * WHERE {
-    ?person ex:age ?age ;
-            ex:status ?status .
-    FILTER(?age > 18)
+    ?person ex:unknownLink ?friend .
+    OPTIONAL {
+      ?friend foaf:name ?friendName .
+    }
   }
   ```
 
@@ -274,17 +424,23 @@ Another `UNALINGED` case with FILTER and constraints:
 
   ```turtle
   @prefix sh: <http://www.w3.org/ns/shacl#> .
-  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+  @prefix ex: <http://example.org/> .
 
-  <http://example.org/ClosedAgeShape> a sh:NodeShape ;
+  ex:PersonShape a sh:NodeShape ;
     sh:closed true ;
     sh:property [
-      sh:path <https://www.example.ca/age> ;
-      sh:datatype xsd:integer
+      sh:path ex:knows ;
+      sh:node ex:FriendShape
     ] .
+
+  ex:FriendShape a sh:NodeShape ;
+    sh:closed true ;
+    sh:property [ sh:path foaf:name ] .
   ```
 
-On a closed shape, `ex:age` matches but `ex:status` does not, so containment is partial (`UNALINGED`) even though the FILTER is constraint-compatible.
+The required root `ex:unknownLink` pattern does not match the shape, but the
+optional nested `foaf:name` pattern matches `ex:FriendShape`. The root result is
+therefore `UNALINGED` because only a nested star pattern is aligned.
 
 #### 4. `WEAKLY_REJECTED`
 
@@ -306,15 +462,18 @@ No triple pattern matches and at least one candidate shape is open.
     sh:property [ sh:path foaf:name ] .
   ```
 
-Another `WEAKLY_REJECTED` case with FILTER and constraints:
+Another `WEAKLY_REJECTED` case has only optional predicates, none of which are
+defined by an open shape:
 
 * **Query**:
 
   ```sparql
-  PREFIX ex: <https://www.example.ca/>
+  PREFIX ex: <http://example.org/>
   SELECT * WHERE {
-    ?person ex:age ?age .
-    FILTER(?age > 18)
+    OPTIONAL {
+      ?person ex:email ?email ;
+              ex:phone ?phone .
+    }
   }
   ```
 
@@ -322,20 +481,21 @@ Another `WEAKLY_REJECTED` case with FILTER and constraints:
 
   ```turtle
   @prefix sh: <http://www.w3.org/ns/shacl#> .
-  @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+  @prefix ex: <http://example.org/> .
 
-  <http://example.org/OpenStringAgeShape> a sh:NodeShape ;
+  ex:PersonShape a sh:NodeShape ;
     sh:property [
-      sh:path <https://www.example.ca/age> ;
-      sh:datatype xsd:string
+      sh:path ex:name
     ] .
   ```
 
-The numeric FILTER contradicts the string datatype constraint. Because the shape is open, the result is `WEAKLY_REJECTED`.
+Neither optional predicate is defined by the open shape, so no triple pattern
+matches. Because the shape is open, the result is `WEAKLY_REJECTED` rather than
+`REJECTED`.
 
 #### 5. `REJECTED`
 
-The query uses `schema:birthDate`, but the shape only defines `foaf:name`.
+The query uses `schema:birthDate`, but the closed shape only defines `foaf:name`.
 
 * **Query**:
 
@@ -412,15 +572,50 @@ Another `REJECTED` case due to min/max value constraints:
 
 The FILTER range (`> 35`) conflicts with the shape range (`18..35`), so the result is `REJECTED`.
 
+## Solver options and report fields
+
+`solveShapeQueryContainment` accepts, besides `query` and `shapes`:
+
+| Option | Meaning |
+| :----- | :------ |
+| `dependentShapes` | Shapes that are not candidates themselves but are referenced by `sh:node` from a candidate. They are needed to resolve those references: an unresolvable `sh:node` cannot be refuted and is treated as satisfied, so omitting them over-estimates relevance. |
+| `decidingShapes` | Restricts which shapes in `shapes` are candidates. The others are treated as `dependentShapes`: they still resolve `sh:node` references from the candidates, but never classify a star pattern themselves, lend evidence through `sh:node` references of their own, or receive a visit indication. Use it to apply an external eligibility rule, such as the input/output role filtering defined by the discovery specification. |
+
+The report carries:
+
+| Field | Meaning |
+| :---- | :------ |
+| `result` | The aggregate result for the complete query (see above). |
+| `starPatternsContainment` | Per star pattern: its result, the matching shape IRIs, and the predicate-level bindings. |
+| `visitShapeBoundedResource` | Per shape: whether at least one triple pattern bound to it. Independent of `result`, and usable to decide whether to retrieve the data behind a shape. |
+| `unsupported` | Constructs discarded during normalization, if any, including the targets of a source shape that could not be translated (`TARGETS`). |
+
 ## SPARQL Limitations
 
 The detection logic is focused on **Triple Patterns** and **Star Patterns**. Currently, the following SPARQL features are not (yet) supported:
 
 - **Filter Expressions**: FILTERs are only used to detect contradictions with shape constraints (for example numeric comparisons against non-numeric datatype constraints). Expressions that cannot be safely compared to shape constraints are conservatively ignored for containment decisions.
-- **Negative Patterns**: `MINUS` and `FILTER NOT EXISTS` are not used to determine containment.
+- **Negative Patterns**: `MINUS` and `FILTER NOT EXISTS` are only supported over a single triple pattern, as negated triple patterns (see above). Any other form is discarded: its triple patterns describe solutions to exclude, not data the resource must hold, so collecting them as ordinary patterns would move the result in both directions.
+- **Existence Tests**: Any other `EXISTS` or `NOT EXISTS` stays in its `FILTER` but is undecidable, so it never causes a rejection; the rest of the expression is still evaluated. It is reported as discarded.
 - **Complex Property Paths**: While simple paths are supported, complex or recursive property paths are not considered yet.
 - **Aggregates & Subqueries**: `GROUP BY`, `HAVING`, and subqueries are not processed.
-- **Federated Queries**: `SERVICE` clauses are currently ignored.
+- **Federated Queries**: `SERVICE` clauses are discarded, since they read data from another endpoint.
+
+Discarding a construct removes constraints, so the result can over-estimate relevance
+but never ranks a relevant resource lower than it would otherwise be. Whatever was
+discarded is listed on `query.unsupported` and echoed on `report.unsupported`.
+
+### Queries with no usable triple pattern
+
+An unrestricted triple pattern (`?s ?p ?o`) yields no star pattern, because shapes
+constrain named predicates. It still asks for every triple of the resource, so such a
+query is `CONTAINED` by any shape, every shape is marked visitable, and
+`query.matchesAnyTriple` is set.
+
+A query with no triple pattern at all — an empty `WHERE`, a body of only `VALUES` or
+`FILTER`, or one left empty after discarding — never asks the resource for data, so no
+relevance degree applies. `solveShapeQueryContainment` throws `EmptyQueryError` rather
+than reporting `CONTAINED` for it.
 
 ## License
 

@@ -3,11 +3,12 @@ import { toAlgebra } from '@traqula/algebra-sparql-1-1';
 import { describe, expect, it, test } from 'vitest';
 import { ConstraintType, IShape, Shape } from '../lib/Shape';
 import { IStarPatternWithDependencies, Triple } from '../lib/Triple';
-import { ContainmentResult, IContainmentResult, IResult, StarPatternName, solveShapeQueryContainment } from '../lib/containment';
+import { ContainmentResult, EmptyQueryError, IContainmentResult, IResult, StarPatternName, solveShapeQueryContainment, solveShapeShapeContainment } from '../lib/containment';
 import { DataFactory } from 'rdf-data-factory';
 import { BaseQuad } from '@rdfjs/types';
 import { IQuery, generateQuery } from '../lib/query';
-import { TYPE_DEFINITION } from '../lib/constant';
+import { shapeToQuery } from '../lib/shapeToQuery';
+import { RDF as RDF_VOCAB } from '../lib/constant';
 import type * as RDF from '@rdfjs/types';
 import * as N3 from 'n3';
 import { readFileSync } from 'fs';
@@ -18,6 +19,14 @@ import { shaclShapeFromQuads } from '../lib/shacl';
 const DF = new DataFactory<BaseQuad>();
 const n3Parser = new N3.Parser();
 const sparqlParser = new SPARQLParser();
+
+async function parseShaclShape(quads: RDF.Quad[], name: string): Promise<IShape> {
+    const parsed = await shaclShapeFromQuads(quads, name);
+    if (parsed instanceof Error) {
+        throw parsed;
+    }
+    return parsed;
+}
 
 describe('solveShapeQueryContainment', () => {
 
@@ -110,7 +119,7 @@ describe('solveShapeQueryContainment', () => {
         const shapeP7: Shape = new Shape({
             name: 'foo7', positivePredicates: [
                 {
-                    name: TYPE_DEFINITION.value,
+                    name: RDF_VOCAB.type,
                     constraint: {
                         value: new Set(['<https://www.example.ca/Type>']),
                         type: ConstraintType.SHAPE
@@ -123,7 +132,7 @@ describe('solveShapeQueryContainment', () => {
         const shapeP8: Shape = new Shape({
             name: 'foo8', positivePredicates: [
                 {
-                    name: TYPE_DEFINITION.value,
+                    name: RDF_VOCAB.type,
                     constraint: {
                         value: new Set(['<https://www.example.ca/Type>']),
                         type: ConstraintType.SHAPE
@@ -137,32 +146,36 @@ describe('solveShapeQueryContainment', () => {
          * General tests cases
          * *******************************************************************/
 
-        it('should return an empty result given an empty query and no shape', () => {
+        it('should throw given an empty query and no shape', () => {
             const query: IQuery = {
                 starPatterns: new Map()
             };
             const shapes: IShape[] = [];
-            const expectedResult: IResult = {
 
-                starPatternsContainment: new Map(),
-                visitShapeBoundedResource: new Map()
-            };
-
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+            // An empty query states no constraint, so no relevance degree can be assigned.
+            // Reporting CONTAINED here would rank every resource maximally relevant on no evidence.
+            expect(() => solveShapeQueryContainment({ query, shapes })).toThrow(EmptyQueryError);
         });
 
-        it('should reject every shape given an empty query', () => {
+        it('should throw given an empty query and candidate shapes', () => {
             const query: IQuery = {
                 starPatterns: new Map()
             };
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];
-            const expectedResult: IResult = {
 
-                starPatternsContainment: new Map(),
-                visitShapeBoundedResource: new Map(shapes.map((shape) => [shape.name, false]))
+            expect(() => solveShapeQueryContainment({ query, shapes })).toThrow(EmptyQueryError);
+        });
+
+        it('should report the discarded constructs when a query falls outside the profile', () => {
+            const query: IQuery = {
+                starPatterns: new Map([
+                    ["x", generateZStarPattern()]
+                ]),
+                unsupported: ['MINUS']
             };
+            const shapes: IShape[] = [shape];
 
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+            expect(solveShapeQueryContainment({ query, shapes }).unsupported).toStrictEqual(['MINUS']);
         });
 
         it('should return an empty result given no shape', () => {
@@ -174,7 +187,7 @@ describe('solveShapeQueryContainment', () => {
             };
             const shapes: IShape[] = [];
             const expectedResult: IResult = {
-
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([["x", { result: ContainmentResult.REJECTED, bindings:new Map() }]]),
                 visitShapeBoundedResource: new Map()
             };
@@ -192,7 +205,7 @@ describe('solveShapeQueryContainment', () => {
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];
 
             const expectedResult: IResult = {
-
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings:expect.any(Map) }]
                 ]),
@@ -219,6 +232,7 @@ describe('solveShapeQueryContainment', () => {
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([["z", { result: ContainmentResult.REJECTED, bindings: new Map() }]]),
                 visitShapeBoundedResource: new Map([
                     [shape.name, false],
@@ -243,6 +257,7 @@ describe('solveShapeQueryContainment', () => {
             const shapes: IShape[] = [shape, shapeP1, shapeP2, shapeP3, shapeP4, shapeP5];
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([["z", { result: ContainmentResult.REJECTED, bindings: new Map() }]]),
                 visitShapeBoundedResource: new Map([
                     [shape.name, false],
@@ -277,6 +292,7 @@ describe('solveShapeQueryContainment', () => {
             });
 
             const expectedResult: IResult = {
+                result: ContainmentResult.WEAKLY_REJECTED,
                 starPatternsContainment: new Map([
                     ["z", { result: ContainmentResult.WEAKLY_REJECTED, bindings: new Map() }]
                 ]),
@@ -304,6 +320,7 @@ describe('solveShapeQueryContainment', () => {
             });
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["z", { result: ContainmentResult.REJECTED, bindings: new Map() }]
                 ]),
@@ -343,6 +360,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -383,6 +401,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -423,6 +442,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -432,6 +452,38 @@ describe('solveShapeQueryContainment', () => {
             };
 
             expect(solveShapeQueryContainment({ query, shapes: [shape] })).toStrictEqual(expectedResult);
+        });
+
+        it.each([
+            ['^fo', '^foo', '', ContainmentResult.CONTAINED],
+            ['^foo', 'bar', '', ContainmentResult.CONTAINED],
+            ['^foo', '^FOO', 'i', ContainmentResult.CONTAINED],
+            ['^foo$', 'oo', '', ContainmentResult.CONTAINED],
+            ['^foo$', 'bar', '', ContainmentResult.REJECTED],
+            ['^foo$', '^foobar', '', ContainmentResult.REJECTED],
+        ])('should reject sh:pattern "%s" against FILTER regex "%s" (flags "%s") only when no string matches both', async (shapePattern, filterPattern, flags, expected) => {
+            const shacl = `
+            PREFIX ex: <https://www.example.ca/>
+            PREFIX sh: <http://www.w3.org/ns/shacl#>
+            PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+            ex:patternShape a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [
+                    sh:path ex:nickname ;
+                    sh:datatype xsd:string ;
+                    sh:pattern "${shapePattern}"
+                ] .
+            `;
+            const shape = await shaclShapeFromQuads(n3Parser.parse(shacl), 'https://www.example.ca/patternShape') as IShape;
+            const query = generateQuery(toAlgebra(sparqlParser.parse(`
+            PREFIX ex: <https://www.example.ca/>
+            SELECT * WHERE {
+              ?s ex:nickname ?nickname .
+              FILTER(regex(str(?nickname), "${filterPattern}", "${flags}"))
+            }`)));
+
+            expect(solveShapeQueryContainment({ query, shapes: [shape] }).result).toBe(expected);
         });
 
         it('should support FILTER datatype(?v) comparison with VALUES', () => {
@@ -447,6 +499,7 @@ describe('solveShapeQueryContainment', () => {
             const shapes: IShape[] = [shape];
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -487,6 +540,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -528,6 +582,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -570,6 +625,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.CONTAINED, target: [shape.name], bindings: expect.any(Map) }],
                 ]),
@@ -612,6 +668,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -653,6 +710,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -692,6 +750,7 @@ describe('solveShapeQueryContainment', () => {
             const shape = parsedShape as IShape;
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["s", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -708,7 +767,7 @@ describe('solveShapeQueryContainment', () => {
                 name: 'fooClassConstraint',
                 positivePredicates: [
                     {
-                        name: TYPE_DEFINITION.value,
+                        name: RDF_VOCAB.type,
                         constraint: {
                             type: ConstraintType.CLASS,
                             value: new Set(['https://www.example.ca/Person'])
@@ -728,6 +787,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
                 ]),
@@ -764,6 +824,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
                 ]),
@@ -801,6 +862,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
                 ]),
@@ -838,6 +900,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.CONTAINED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.CONTAINED, target: [constrainedShape.name], bindings: expect.any(Map) }],
                 ]),
@@ -874,6 +937,7 @@ describe('solveShapeQueryContainment', () => {
             const query = generateQuery(querySparql);
 
             const expectedResult: IResult = {
+                result: ContainmentResult.REJECTED,
                 starPatternsContainment: new Map([
                     ["x", { result: ContainmentResult.REJECTED, bindings: new Map() }],
                 ]),
@@ -896,6 +960,7 @@ describe('solveShapeQueryContainment', () => {
             expect(resp.starPatternsContainment.get("w")?.result).toBe(ContainmentResult.CONTAINED);
             expect(resp.starPatternsContainment.get("w1")?.result).toBe(ContainmentResult.CONTAINED);
             expect(resp.starPatternsContainment.get("w2")?.result).toBe(ContainmentResult.CONTAINED);
+            expect(resp.result).toBe(ContainmentResult.CONTAINED);
 
             expect(resp.visitShapeBoundedResource).toStrictEqual(new Map([
                 [shape.name, true],
@@ -920,7 +985,7 @@ describe('solveShapeQueryContainment', () => {
                 ["w", { result: ContainmentResult.UNALINGED, target: [shapeP3.name, shapeP4.name], bindings:expect.any(Map) }],
             ]);
             const expectedResult: IResult = {
-
+                result: ContainmentResult.UNALINGED,
                 starPatternsContainment: expectedStarPatternsContainment,
                 visitShapeBoundedResource: new Map([
                     [shape.name, true],
@@ -933,7 +998,9 @@ describe('solveShapeQueryContainment', () => {
                 ])
             };
 
-            expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
+            const result = solveShapeQueryContainment({ query, shapes });
+            expect(result).toStrictEqual(expectedResult);
+            expect(result.result).toBe(ContainmentResult.UNALINGED);
 
         });
 
@@ -958,6 +1025,7 @@ describe('solveShapeQueryContainment', () => {
                 ["w", { result: ContainmentResult.UNALINGED, target: [shapeP3.name, shapeP4.name], bindings:expect.any(Map) }],
             ]);
             const expectedResult: IResult = {
+                result: ContainmentResult.UNALINGED,
                 starPatternsContainment: expectedStarPatternsContainment,
                 visitShapeBoundedResource: new Map([
                     [shape.name, false],
@@ -989,7 +1057,7 @@ describe('solveShapeQueryContainment', () => {
                 ["z", { result: ContainmentResult.CONTAINED, bindings:expect.any(Map), target: [shape.name] }],
             ]);
             const expectedResult: IResult = {
-
+                result: ContainmentResult.UNALINGED,
                 starPatternsContainment: expectedStarPatternsContainment,
                 visitShapeBoundedResource: new Map([
                     [shape.name, true],
@@ -1003,6 +1071,131 @@ describe('solveShapeQueryContainment', () => {
 
             expect(solveShapeQueryContainment({ query, shapes })).toStrictEqual(expectedResult);
 
+        });
+
+        it('should support shape-to-shape containment through shapeToQuery wrapper', () => {
+            const sourceShape: IShape = new Shape({
+                name: 'https://www.example.ca/source',
+                positivePredicates: [
+                    {
+                        name: RDF_VOCAB.type,
+                        constraint: {
+                            type: ConstraintType.CLASS,
+                            value: new Set(['https://www.example.ca/Person'])
+                        }
+                    },
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
+                            minInclusive: 18,
+                            maxInclusive: 35
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const targetShape: IShape = new Shape({
+                name: 'https://www.example.ca/target',
+                positivePredicates: [
+                    {
+                        name: RDF_VOCAB.type,
+                        constraint: {
+                            type: ConstraintType.CLASS,
+                            value: new Set(['https://www.example.ca/Person'])
+                        }
+                    },
+                    {
+                        name: 'https://www.example.ca/age',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#integer']),
+                            minInclusive: 10,
+                            maxInclusive: 40
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const result = solveShapeShapeContainment({
+                sourceShape,
+                targetShapes: [targetShape],
+            });
+
+            expect(result.starPatternsContainment.get(sourceShape.name)?.result).toBe(ContainmentResult.CONTAINED);
+            expect(result.result).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should support shape-to-shape containment with source linked shapes', () => {
+            const childSource: IShape = new Shape({
+                name: 'https://www.example.ca/sourceChild',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/nickname',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#string']),
+                            pattern: '^a'
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const sourceShape: IShape = new Shape({
+                name: 'https://www.example.ca/sourceRoot',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/knows',
+                        constraint: {
+                            type: ConstraintType.SHAPE,
+                            value: new Set([childSource.name])
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const childTarget: IShape = new Shape({
+                name: childSource.name,
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/nickname',
+                        constraint: {
+                            type: ConstraintType.DATATYPE,
+                            value: new Set(['http://www.w3.org/2001/XMLSchema#string']),
+                            pattern: '^a'
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const targetShape: IShape = new Shape({
+                name: 'https://www.example.ca/targetRoot',
+                positivePredicates: [
+                    {
+                        name: 'https://www.example.ca/knows',
+                        constraint: {
+                            type: ConstraintType.SHAPE,
+                            value: new Set([childTarget.name])
+                        }
+                    }
+                ],
+                closed: true,
+            });
+
+            const result = solveShapeShapeContainment({
+                sourceShape,
+                sourceLinkedShapes: [childSource],
+                targetShapes: [targetShape, childTarget],
+            });
+
+            expect(result.starPatternsContainment.get(sourceShape.name)?.result).toBe(ContainmentResult.CONTAINED);
+            expect(result.result).toBe(ContainmentResult.CONTAINED);
         });
 
         function generateMatchingQuery(): IQuery {
@@ -1076,15 +1269,15 @@ describe('solveShapeQueryContainment', () => {
                 ?x <https://www.example.ca/p6> ?z .
                 ?x <https://www.example.ca/p5> ?w .
         
-                ?y <${TYPE_DEFINITION.value}> <https://www.example.ca/Type> .
+                ?y <${RDF_VOCAB.type}> <https://www.example.ca/Type> .
         
-                ?z <${TYPE_DEFINITION.value}> <https://www.example.ca/Type> .
+                ?z <${RDF_VOCAB.type}> <https://www.example.ca/Type> .
                 ?z <https://www.example.ca/p0972> <https://www.example.ca/Type> .
                 
                 ?w <https://www.example.ca/p3> ?w1 .
                 ?w <https://www.example.ca/p10> ?w1 .
         
-                ?zz <${TYPE_DEFINITION.value}> <https://www.example.ca/Kipe> .
+                ?zz <${RDF_VOCAB.type}> <https://www.example.ca/Kipe> .
                 ?zz <https://www.example.ca/p0972> <https://www.example.ca/IDK> .
               }
             `;
@@ -1232,7 +1425,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-short-2', async () => {
@@ -1299,7 +1492,8 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                // The BIND is discarded and reported
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment, unsupported: ['BIND'] });
             });
 
             test('interactive-short-4', async () => {
@@ -1343,7 +1537,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-short-5', async () => {
@@ -1375,7 +1569,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
         });
 
@@ -1456,7 +1650,7 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             test('interactive-discover-2 comment missing', async () => {
@@ -1537,7 +1731,8 @@ describe('solveShapeQueryContainment', () => {
                     ["tag", { result: ContainmentResult.REJECTED, target: undefined, bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                // The aggregation is discarded and reported
+                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment, unsupported: ['AGGREGATE'] });
             });
 
             test('interactive-discover-4', async () => {
@@ -1571,7 +1766,8 @@ describe('solveShapeQueryContainment', () => {
                     ["location", { result: ContainmentResult.REJECTED, target: undefined, bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                // The aggregation is discarded and reported
+                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment, unsupported: ['AGGREGATE'] });
             });
 
             test('interactive-discover-5', async () => {
@@ -1598,7 +1794,7 @@ describe('solveShapeQueryContainment', () => {
                     ["message", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Comment", "http://example.com#Post"], bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             it('interactive-discover-6', async () => {
@@ -1634,7 +1830,7 @@ describe('solveShapeQueryContainment', () => {
                     ],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.UNALINGED, visitShapeBoundedResource, starPatternsContainment });
             });
 
             it('interactive-discover-7', async () => {
@@ -1709,9 +1905,12 @@ describe('solveShapeQueryContainment', () => {
                     ["person", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Profile"], bindings:expect.any(Map), }],
                     ["message", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Comment", "http://example.com#Post"], bindings:expect.any(Map), }],
                     ["otherMessage", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Comment", "http://example.com#Post"], bindings:expect.any(Map), }],
+                    // The liked node is the subject of every branch of the alternative path. No shape
+                    // declares snvoc:hasPost or snvoc:hasComment, and all the shapes are closed.
+                    ["g_0", { result: ContainmentResult.REJECTED, bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment });
             });
         });
 
@@ -1746,3 +1945,629 @@ describe('solveShapeQueryContainment', () => {
     })
 });
 
+
+describe('supported profile and explicit negation', () => {
+    const P = `PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+               PREFIX ex: <http://example.org/>`;
+
+    async function classify(rawQuery: string, rawShape: string): Promise<ContainmentResult> {
+        const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
+        const candidate = await parseShaclShape(new N3.Parser().parse(rawShape), 'http://example.org/S');
+        return solveShapeQueryContainment({ query, shapes: [candidate] }).result;
+    }
+
+    const SHAPE_PREFIXES = `@prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+        @prefix ex: <http://example.org/> .`;
+
+    const openNameShape = `${SHAPE_PREFIXES}
+        <http://example.org/S> a sh:NodeShape ;
+            sh:property [ sh:path foaf:name ] .`;
+
+    const closedNameShape = `${SHAPE_PREFIXES}
+        <http://example.org/S> a sh:NodeShape ;
+            sh:closed true ;
+            sh:property [ sh:path foaf:name ] .`;
+
+    describe('OPTIONAL patterns', () => {
+        const query = 'SELECT * WHERE { ?s foaf:name ?n . OPTIONAL { ?s ex:age ?a } }';
+
+        it('should not let an unmatched OPTIONAL pattern block containment on an open shape', async () => {
+            expect(await classify(query, openNameShape)).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should classify the same query identically on the closed counterpart of the shape', async () => {
+            expect(await classify(query, closedNameShape)).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should not consider a star pattern of only unmatched OPTIONAL patterns contained', async () => {
+            expect(await classify('SELECT * WHERE { OPTIONAL { ?s ex:email ?e } }', openNameShape))
+                .toBe(ContainmentResult.WEAKLY_REJECTED);
+        });
+    });
+
+    describe('discarded constructs', () => {
+        it('should not let a MINUS block lower the result', async () => {
+            expect(await classify('SELECT * WHERE { ?s foaf:name ?n . MINUS { ?s ex:age ?a . ?s ex:email ?e } }', closedNameShape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should not let a MINUS block raise the result', async () => {
+            expect(await classify('SELECT * WHERE { ?s ex:unknown ?x . MINUS { ?s foaf:name ?n . ?s ex:email ?e } }', closedNameShape))
+                .toBe(ContainmentResult.REJECTED);
+        });
+
+        it('should not let a SERVICE clause raise the result', async () => {
+            expect(await classify('SELECT * WHERE { ?s ex:unknown ?x . SERVICE <http://x.example/sp> { ?s foaf:name ?n } }', closedNameShape))
+                .toBe(ContainmentResult.REJECTED);
+        });
+
+        it('should record the discarded constructs on the query', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { ?s foaf:name ?n . MINUS { ?s ex:age ?a . ?s ex:email ?e } }`)));
+            expect(query.unsupported).toStrictEqual(['MINUS']);
+        });
+
+        it('should record a construct discarded inside a UNION branch on the query', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { { ?s foaf:name ?n . SERVICE <http://x.example/sp> { ?s ex:age ?a } } UNION { ?s ex:email ?e } }`)));
+            expect(query.unsupported).toStrictEqual(['SERVICE']);
+        });
+
+        it.each([
+            ['FILTER EXISTS { ?s ex:age ?a }', ['EXISTS']],
+            ['FILTER(?n = "a" || NOT EXISTS { ?s ex:age ?a })', ['NOT EXISTS']],
+            ['FILTER(!EXISTS { ?s ex:age ?a . ?s ex:email ?e })', ['NOT EXISTS']],
+            ['OPTIONAL { ?s ex:email ?e FILTER NOT EXISTS { ?s ex:age ?a } }', ['NOT EXISTS']],
+        ])('should record a discarded existence test in %s', (pattern, unsupported) => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { ?s foaf:name ?n . ${pattern} }`)));
+            expect(query.unsupported).toStrictEqual(unsupported);
+        });
+
+        it('should keep the decidable part of a FILTER that contains a discarded existence test', async () => {
+            const shape = `${SHAPE_PREFIXES} @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+                <http://example.org/S> a sh:NodeShape ;
+                    sh:property [ sh:path ex:age ; sh:datatype xsd:integer ; sh:minInclusive 0 ] .`;
+            expect(await classify('SELECT * WHERE { ?s ex:age ?a . FILTER(?a < 0 && NOT EXISTS { ?s ex:x ?y . ?s ex:z ?w }) }', shape))
+                .toBe(ContainmentResult.WEAKLY_REJECTED);
+        });
+
+        it('should throw when every triple pattern came from a discarded construct', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { SERVICE <http://x.example/sp> { ?s foaf:name ?n } }`)));
+            expect(query.starPatterns.size).toBe(0);
+            expect(query.unsupported).toStrictEqual(['SERVICE']);
+            expect(() => solveShapeQueryContainment({ query, shapes: [] })).toThrow(EmptyQueryError);
+        });
+    });
+
+    describe('negated triple patterns', () => {
+        const requiresPwShape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:property [ sh:path foaf:name ], [ sh:path ex:pw ; sh:minCount 1 ] .`;
+        const optionalPwShape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:property [ sh:path foaf:name ], [ sh:path ex:pw ] .`;
+        const forbidsPwShape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:property [ sh:path foaf:name ] ;
+                sh:not [ sh:path ex:pw ; sh:minCount 1 ] .`;
+
+        function normalize(pattern: string): IQuery {
+            return generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { ?s foaf:name ?n . ${pattern} }`)));
+        }
+
+        describe.each([
+            'FILTER NOT EXISTS { ?s ex:pw ?p }',
+            'FILTER(!EXISTS { ?s ex:pw ?p })',
+            'MINUS { ?s ex:pw ?p }',
+            'MINUS { ?s ex:pw [] }',
+        ])('%s', (pattern) => {
+            const query = `SELECT * WHERE { ?s foaf:name ?n . ${pattern} }`;
+
+            it('should become an excluded predicate of the star pattern of its subject', () => {
+                const normalized = normalize(pattern);
+                expect(normalized.starPatterns.get('s')!.excludedPredicates).toStrictEqual(new Set(['http://example.org/pw']));
+                expect(normalized.unsupported).toBeUndefined();
+                expect(normalized.filters).toBeUndefined();
+            });
+
+            it('should be rejected by a shape that requires the predicate, although the shape is open', async () => {
+                expect(await classify(query, requiresPwShape)).toBe(ContainmentResult.REJECTED);
+            });
+
+            it.each([
+                ['declares the predicate optional', optionalPwShape],
+                ['forbids the predicate', forbidsPwShape],
+                ['is closed without declaring the predicate', closedNameShape],
+            ])('should not prevent containment by a shape that %s', async (_, shape) => {
+                expect(await classify(query, shape)).toBe(ContainmentResult.CONTAINED);
+            });
+        });
+
+        it.each([
+            ['an object bound by the group', 'FILTER NOT EXISTS { ?s ex:pw ?n }', 'NOT EXISTS'],
+            ['a constant object', 'FILTER NOT EXISTS { ?s ex:pw ex:secret }', 'NOT EXISTS'],
+            ['a subject the group does not bind', 'FILTER NOT EXISTS { ?x ex:pw ?p }', 'NOT EXISTS'],
+            ['more than one triple pattern', 'FILTER NOT EXISTS { ?s ex:pw ?p . ?p ex:kind ?k }', 'NOT EXISTS'],
+            ['no variable shared with the left operand', 'MINUS { ?x ex:pw ?p }', 'MINUS'],
+            ['an OPTIONAL group as its scope', 'OPTIONAL { ?s ex:email ?e MINUS { ?s ex:pw ?p } }', 'MINUS'],
+        ])('should discard a negation with %s', async (_, pattern, construct) => {
+            const normalized = normalize(pattern);
+            expect(normalized.unsupported).toStrictEqual([construct]);
+            expect(normalized.starPatterns.get('s')!.excludedPredicates).toBeUndefined();
+            expect(await classify(`SELECT * WHERE { ?s foaf:name ?n . ${pattern} }`, requiresPwShape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should discard a negation whose subject is bound only by an OPTIONAL pattern', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+                `${P} SELECT * WHERE { ?y foaf:name ?n . OPTIONAL { ?s ex:email ?e } FILTER NOT EXISTS { ?s ex:pw ?p } }`)));
+            expect(query.unsupported).toStrictEqual(['NOT EXISTS']);
+            expect(query.starPatterns.get('s')!.excludedPredicates).toBeUndefined();
+        });
+
+        describe('on a nested star pattern', () => {
+            const shapes = `${SHAPE_PREFIXES}
+                <http://example.org/PersonShape> a sh:NodeShape ;
+                    sh:property [ sh:path ex:address ; sh:node <http://example.org/AddressShape> ] .
+                <http://example.org/AddressShape> a sh:NodeShape ;
+                    sh:property [ sh:path ex:city ], [ sh:path ex:zip ; sh:minCount 1 ] .`;
+
+            async function report(rawQuery: string): Promise<IResult> {
+                const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
+                const quads = new N3.Parser().parse(shapes);
+                const person = await parseShaclShape(quads, 'http://example.org/PersonShape');
+                const address = await parseShaclShape(quads, 'http://example.org/AddressShape');
+                return solveShapeQueryContainment({ query, shapes: [person], dependentShapes: [address] });
+            }
+
+            it('should be contained without the negation', async () => {
+                expect((await report('SELECT * WHERE { ?p ex:address ?a . ?a ex:city ?c }')).result)
+                    .toBe(ContainmentResult.CONTAINED);
+            });
+
+            it('should refute the sh:node dependency when the referenced shape requires the predicate', async () => {
+                const result = await report('SELECT * WHERE { ?p ex:address ?a . ?a ex:city ?c . FILTER NOT EXISTS { ?a ex:zip ?z } }');
+                expect(result.starPatternsContainment.get('p')!.result).toBe(ContainmentResult.WEAKLY_REJECTED);
+                expect(result.starPatternsContainment.get('a')!.result).toBe(ContainmentResult.WEAKLY_REJECTED);
+                expect(result.result).toBe(ContainmentResult.WEAKLY_REJECTED);
+            });
+        });
+
+        describe('from a negative predicate of an input shape', () => {
+            const input = `${SHAPE_PREFIXES}
+                <http://example.org/In> a sh:NodeShape ;
+                    sh:property [ sh:path foaf:name ; sh:minCount 1 ] ;
+                    sh:not [ sh:path ex:pw ; sh:minCount 1 ] .`;
+
+            async function compare(rawTarget: string): Promise<ContainmentResult> {
+                const sourceShape = await parseShaclShape(new N3.Parser().parse(input), 'http://example.org/In');
+                const target = await parseShaclShape(new N3.Parser().parse(rawTarget), 'http://example.org/S');
+                return solveShapeShapeContainment({ sourceShape, targetShapes: [target] }).result;
+            }
+
+            it('should become an excluded predicate of the translated star pattern', async () => {
+                const sourceShape = await parseShaclShape(new N3.Parser().parse(input), 'http://example.org/In');
+                expect(shapeToQuery(sourceShape).starPatterns.get('http://example.org/In')!.excludedPredicates)
+                    .toStrictEqual(new Set(['http://example.org/pw']));
+            });
+
+            it('should be rejected by a target shape that requires the predicate', async () => {
+                expect(await compare(requiresPwShape)).toBe(ContainmentResult.REJECTED);
+            });
+
+            it('should be contained by a target shape that does not require the predicate', async () => {
+                expect(await compare(optionalPwShape)).toBe(ContainmentResult.CONTAINED);
+            });
+        });
+    });
+
+    describe('queries that ask for every triple', () => {
+        // `?s ?p ?o` is maximally unselective rather than unanswerable: it asks for every triple of
+        // the resource, so any resource is relevant and the honest result is CONTAINED.
+        async function report(rawQuery: string): Promise<{ query: IQuery; result: IResult }> {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${P} ${rawQuery}`)));
+            const candidate = await parseShaclShape(new N3.Parser().parse(closedNameShape), 'http://example.org/S');
+            return { query, result: solveShapeQueryContainment({ query, shapes: [candidate] }) };
+        }
+
+        it('should report CONTAINED for an unrestricted triple pattern', async () => {
+            const { query, result } = await report('SELECT * WHERE { ?s ?p ?o }');
+            expect(query.matchesAnyTriple).toBe(true);
+            expect(query.unsupported).toBeUndefined();
+            expect(result.result).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should report CONTAINED for an unrestricted OPTIONAL triple pattern', async () => {
+            const { result } = await report('SELECT * WHERE { OPTIONAL { ?s ?p ?o } }');
+            expect(result.result).toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should mark every candidate shape visitable, since the query wants all their triples', async () => {
+            const { result } = await report('SELECT * WHERE { ?s ?p ?o }');
+            expect([...result.visitShapeBoundedResource.values()]).toStrictEqual([true]);
+        });
+
+        it('should still throw when there is no triple pattern at all', () => {
+            const query = generateQuery(toAlgebra(new SPARQLParser().parse('SELECT ?x WHERE { VALUES ?x { 1 2 } }')));
+            expect(query.matchesAnyTriple).toBeUndefined();
+            expect(() => solveShapeQueryContainment({ query, shapes: [] })).toThrow(EmptyQueryError);
+        });
+    });
+
+    describe('several disjunctions', () => {
+        const shape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:closed true ;
+                sh:property [ sh:path foaf:name ] ;
+                sh:or ( [ sh:path ex:email ] [ sh:path ex:fax ] ) ;
+                sh:xone ( [ sh:path ex:phone ] [ sh:path ex:mobile ] ) .`;
+
+        it.each([
+            ['the first', 'ex:email'],
+            ['the second', 'ex:phone'],
+        ])('should match a predicate of %s disjunction of a closed shape', async (_, predicate) => {
+            expect(await classify(`SELECT * WHERE { ?s foaf:name ?n ; ${predicate} ?x }`, shape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should match predicates of both disjunctions together', async () => {
+            expect(await classify('SELECT * WHERE { ?s ex:fax ?f ; ex:mobile ?m }', shape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+    });
+
+    describe('sh:not', () => {
+        const notShape = `${SHAPE_PREFIXES}
+            <http://example.org/S> a sh:NodeShape ;
+                sh:property [ sh:path foaf:name ] ;
+                sh:not [ sh:path ex:secret ; sh:minCount 1 ] .`;
+
+        it('should reject a predicate the shape explicitly forbids, even on an open shape', async () => {
+            expect(await classify('SELECT * WHERE { ?s ex:secret ?x }', notShape))
+                .toBe(ContainmentResult.REJECTED);
+        });
+
+        it('should still match the positive predicates of the same shape', async () => {
+            expect(await classify('SELECT * WHERE { ?s foaf:name ?n }', notShape))
+                .toBe(ContainmentResult.CONTAINED);
+        });
+
+        it('should reject a predicate forbidden by any of several sh:not values', async () => {
+            const shape = `${SHAPE_PREFIXES}
+                <http://example.org/S> a sh:NodeShape ;
+                    sh:property [ sh:path foaf:name ] ;
+                    sh:not [ sh:path ex:secret ; sh:minCount 1 ], [ sh:path ex:pin ; sh:minCount 1 ] .`;
+            expect(await classify('SELECT * WHERE { ?s ex:secret ?x }', shape)).toBe(ContainmentResult.REJECTED);
+            expect(await classify('SELECT * WHERE { ?s ex:pin ?x }', shape)).toBe(ContainmentResult.REJECTED);
+        });
+
+        // Each of these negations holds for some nodes that carry ex:secret, so the open shape does not exclude it.
+        it.each([
+            ['allows one value', '[ sh:path ex:secret ; sh:minCount 2 ]'],
+            ['requires a value that is not a string', '[ sh:path ex:secret ; sh:datatype xsd:string ]'],
+            ['only excludes the value ex:x', '[ sh:path ex:secret ; sh:minCount 1 ; sh:hasValue ex:x ]'],
+        ])('should not reject a predicate under a sh:not that %s', async (_, negation) => {
+            const shape = `${SHAPE_PREFIXES} @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+                <http://example.org/S> a sh:NodeShape ;
+                    sh:property [ sh:path foaf:name ] ;
+                    sh:not ${negation} .`;
+            expect(await classify('SELECT * WHERE { ?s ex:secret ?x }', shape))
+                .toBe(ContainmentResult.WEAKLY_REJECTED);
+        });
+    });
+});
+
+describe('dependency-only shapes', () => {
+    // `dependentShapes` carries shapes that are not candidates themselves but are referenced by
+    // sh:node from a candidate. They must be resolvable, otherwise the constraint is treated as
+    // satisfied (Bindings.handleShapeConstraint returns RESPECT for an unknown linked shape) and
+    // the root star pattern binds on a dependency that was never checked.
+    const shapesTtl = `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+        @prefix ex: <http://example.org/> .
+
+        ex:A a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path ex:knows ; sh:node ex:B ] .
+
+        ex:B a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path foaf:name ] .`;
+
+    // Same shapes with ex:A open. Resolving sh:node only asks whether the nested star pattern is
+    // fully bound by ex:B, so ex:B's own openness never changes the outcome; ex:A's does, because
+    // it decides between the two rejection degrees once the root triple fails to bind.
+    const openRootShapesTtl = shapesTtl.replace('ex:A a sh:NodeShape ; sh:closed true ;', 'ex:A a sh:NodeShape ;');
+
+    const PREFIXES = `PREFIX foaf: <http://xmlns.com/foaf/0.1/> PREFIX ex: <http://example.org/>`;
+
+    async function rootResultFor(rawQuery: string, useDependentShapes: boolean, ttl: string = shapesTtl): Promise<ContainmentResult> {
+        const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${PREFIXES} ${rawQuery}`)));
+        const quads = new N3.Parser().parse(ttl);
+        const candidate = await parseShaclShape(quads, 'http://example.org/A');
+        const linked = await parseShaclShape(quads, 'http://example.org/B');
+        const report = solveShapeQueryContainment({
+            query,
+            shapes: [candidate],
+            ...(useDependentShapes ? { dependentShapes: [linked] } : {}),
+        });
+        return report.starPatternsContainment.get('p')!.result;
+    }
+
+    const nonFitting = 'SELECT * WHERE { ?p ex:knows ?f . ?f ex:somethingElse ?x }';
+    const fitting = 'SELECT * WHERE { ?p ex:knows ?f . ?f foaf:name ?n }';
+
+    it('should check the dependency when the referenced shape is supplied', async () => {
+        expect(await rootResultFor(nonFitting, true)).toBe(ContainmentResult.REJECTED);
+    });
+
+    it('should bind the root when the nested pattern fits the referenced shape', async () => {
+        expect(await rootResultFor(fitting, true)).toBe(ContainmentResult.CONTAINED);
+    });
+
+    it('should weakly reject rather than reject when the referring shape is open', async () => {
+        expect(await rootResultFor(nonFitting, true, openRootShapesTtl)).toBe(ContainmentResult.WEAKLY_REJECTED);
+    });
+
+    it('should bind the root on a fitting nested pattern whatever the referring shape is', async () => {
+        expect(await rootResultFor(fitting, true, openRootShapesTtl)).toBe(ContainmentResult.CONTAINED);
+    });
+
+    it('should over-estimate when the referenced shape is unavailable', async () => {
+        // Documents the remaining approximation: with no way to resolve ex:B the sh:node
+        // constraint cannot be refuted, so the root binds even though the nested pattern does not fit.
+        expect(await rootResultFor(nonFitting, false)).toBe(ContainmentResult.CONTAINED);
+    });
+});
+
+describe('nested dependencies and partial matches', () => {
+    // ex:PersonShape is closed and declares foaf:knows, constrained by sh:node ex:FriendShape.
+    // Whether the nested pattern is refuted depends on ex:FriendShape: closed, it forbids anything
+    // it does not declare; open, it is merely silent.
+    const shapesTtl = (friendClosed: boolean): string => `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+        @prefix ex: <http://example.org/> .
+
+        ex:PersonShape a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path foaf:knows ; sh:node ex:FriendShape ] .
+
+        ex:FriendShape a sh:NodeShape ; ${friendClosed ? 'sh:closed true ;' : ''}
+            sh:property [ sh:path foaf:name ] .`;
+
+    const PREFIXES = `PREFIX foaf: <http://xmlns.com/foaf/0.1/> PREFIX ex: <http://example.org/>`;
+    // foaf:mbox is not declared by ex:FriendShape; foaf:name is.
+    const NOT_DECLARED = 'SELECT * WHERE { ?p foaf:knows ?f . ?f foaf:mbox ?m }';
+    const DECLARED = 'SELECT * WHERE { ?p foaf:knows ?f . ?f foaf:name ?n }';
+
+    async function classify(
+        rawQuery: string,
+        friendClosed: boolean,
+        asDependency: boolean,
+    ): Promise<{ root: ContainmentResult; nested: ContainmentResult; aggregate: ContainmentResult }> {
+        const query = generateQuery(toAlgebra(new SPARQLParser().parse(`${PREFIXES} ${rawQuery}`)));
+        const quads = new N3.Parser().parse(shapesTtl(friendClosed));
+        const person = await parseShaclShape(quads, 'http://example.org/PersonShape');
+        const friend = await parseShaclShape(quads, 'http://example.org/FriendShape');
+        const report = asDependency
+            ? solveShapeQueryContainment({ query, shapes: [person], dependentShapes: [friend] })
+            : solveShapeQueryContainment({ query, shapes: [person, friend] });
+        return {
+            root: report.starPatternsContainment.get('p')!.result,
+            nested: report.starPatternsContainment.get('f')!.result,
+            aggregate: report.result,
+        };
+    }
+
+    describe('a dependency that is undecided rather than refuted', () => {
+        it('should leave the root partially matched on the closed referring shape', async () => {
+            // foaf:knows is declared by the closed ex:PersonShape, so the root pattern did match it.
+            // Only the nested pattern is unresolved, and open ex:FriendShape does not forbid it.
+            for (const asDependency of [true, false]) {
+                const { root } = await classify(NOT_DECLARED, false, asDependency);
+                expect(root).toBe(ContainmentResult.UNALINGED);
+            }
+        });
+
+        it('should not make the resource omittable', async () => {
+            for (const asDependency of [true, false]) {
+                const { aggregate } = await classify(NOT_DECLARED, false, asDependency);
+                expect(aggregate).toBe(ContainmentResult.WEAKLY_REJECTED);
+                expect(aggregate).not.toBe(ContainmentResult.REJECTED);
+            }
+        });
+    });
+
+    describe('a dependency that is genuinely refuted', () => {
+        it('should stay rejected, so a closed shape graph can still prune', async () => {
+            for (const asDependency of [true, false]) {
+                const { root, aggregate } = await classify(NOT_DECLARED, true, asDependency);
+                expect(root).toBe(ContainmentResult.REJECTED);
+                expect(aggregate).toBe(ContainmentResult.REJECTED);
+            }
+        });
+    });
+
+    describe('a nested pattern governed by a dependency-only shape', () => {
+        it('should be classified against the shape that governs it, not only the candidates', async () => {
+            // Without this the nested pattern is judged against ex:PersonShape alone, which never
+            // describes it, and a fully satisfiable query comes out REJECTED.
+            for (const friendClosed of [false, true]) {
+                const { nested, aggregate } = await classify(DECLARED, friendClosed, true);
+                expect(nested).toBe(ContainmentResult.CONTAINED);
+                expect(aggregate).toBe(ContainmentResult.CONTAINED);
+            }
+        });
+
+        it('should classify identically however the referenced shape is passed', async () => {
+            for (const query of [NOT_DECLARED, DECLARED]) {
+                for (const friendClosed of [false, true]) {
+                    expect(await classify(query, friendClosed, true))
+                        .toStrictEqual(await classify(query, friendClosed, false));
+                }
+            }
+        });
+    });
+});
+
+describe('role filtering with decidingShapes', () => {
+    // The service relates ex:Response with role disc:OutputShape, and ex:Request and ex:Address with
+    // role disc:InputShape. The user's shapes have role disc:InputShape, so only ex:Response may
+    // decide; the client applies that through decidingShapes. ex:Request and ex:Address are excluded,
+    // but remain part of the shape graph that ex:Response refers to.
+    const serviceTtl = `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+
+        ex:Response a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path ex:request ; sh:node ex:Request ] .
+
+        ex:Request a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path ex:query ] ;
+            sh:property [ sh:path ex:address ; sh:node ex:Address ] .
+
+        ex:Address a sh:NodeShape ; sh:closed true ;
+            sh:property [ sh:path ex:street ] .`;
+
+    const userTtl = `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        @prefix user: <http://example.org/user/> .
+
+        # Reachable from ex:Response, directly and through ex:Request.
+        user:EchoedQuery a sh:NodeShape ;
+            sh:property [ sh:path ex:request ; sh:node user:QueryRequest ] .
+        user:QueryRequest a sh:NodeShape ;
+            sh:property [ sh:path ex:query ] .
+
+        user:EchoedAddress a sh:NodeShape ;
+            sh:property [ sh:path ex:request ; sh:node user:AddressRequest ] .
+        user:AddressRequest a sh:NodeShape ;
+            sh:property [ sh:path ex:address ; sh:node user:StreetAddress ] .
+
+        # Described only by the excluded input shapes.
+        user:Addressed a sh:NodeShape ;
+            sh:property [ sh:path ex:address ; sh:node user:StreetAddress ] .
+        user:StreetAddress a sh:NodeShape ;
+            sh:property [ sh:path ex:street ] .`;
+
+    const RESPONSE = 'http://example.org/Response';
+    const SERVICE_SHAPES = [RESPONSE, 'http://example.org/Request', 'http://example.org/Address'];
+    const USER = 'http://example.org/user/';
+    const USER_SHAPES = ['EchoedQuery', 'QueryRequest', 'EchoedAddress', 'AddressRequest', 'Addressed', 'StreetAddress']
+        .map(name => `${USER}${name}`);
+    const ECHOED_QUERY = `${USER}EchoedQuery`;
+    const ECHOED_ADDRESS = `${USER}EchoedAddress`;
+    const ADDRESSED = `${USER}Addressed`;
+
+    async function parseShapes(ttl: string, names: string[]): Promise<IShape[]> {
+        const quads = new N3.Parser().parse(ttl);
+        const shapes: IShape[] = [];
+        for (const name of names) {
+            shapes.push(await parseShaclShape(quads, name));
+        }
+        return shapes;
+    }
+
+    async function solve(userShape: string, placement: 'deciding' | 'unfiltered' | 'dependent' | 'dropped'): Promise<IResult> {
+        const [response, request, address] = await parseShapes(serviceTtl, SERVICE_SHAPES);
+        const userShapes = await parseShapes(userTtl, USER_SHAPES);
+        const sourceShape = userShapes.find(shape => shape.name === userShape)!;
+        switch (placement) {
+            case 'deciding':
+                return solveShapeShapeContainment({ sourceShape, sourceLinkedShapes: userShapes, targetShapes: [response, request, address], decidingShapes: new Set([RESPONSE]) });
+            case 'unfiltered':
+                return solveShapeShapeContainment({ sourceShape, sourceLinkedShapes: userShapes, targetShapes: [response, request, address] });
+            case 'dependent':
+                // solveShapeShapeContainment takes no dependentShapes, so translate the shape as it does.
+                return solveShapeQueryContainment({ query: shapeToQuery(sourceShape, { linkedShapes: userShapes }), shapes: [response], dependentShapes: [request, address] });
+            case 'dropped':
+                return solveShapeShapeContainment({ sourceShape, sourceLinkedShapes: userShapes, targetShapes: [response] });
+        }
+    }
+
+    function summarize(report: IResult): { aggregate: ContainmentResult; starPatterns: Map<StarPatternName, ContainmentResult>; visit: Map<string, boolean> } {
+        return {
+            aggregate: report.result,
+            starPatterns: new Map(Array.from(report.starPatternsContainment, ([name, { result }]) => [name, result])),
+            visit: report.visitShapeBoundedResource,
+        };
+    }
+
+    it('should resolve references to excluded shapes, directly and transitively', async () => {
+        for (const userShape of [ECHOED_QUERY, ECHOED_ADDRESS]) {
+            expect((await solve(userShape, 'deciding')).result).toBe(ContainmentResult.CONTAINED);
+        }
+    });
+
+    it('should lose that match when the excluded shapes are dropped instead', async () => {
+        // The unresolvable reference leaves the nested pattern to ex:Response alone, which is closed
+        // and never describes it.
+        expect((await solve(ECHOED_QUERY, 'dropped')).result).toBe(ContainmentResult.REJECTED);
+    });
+
+    it('should not let an excluded shape lend evidence through its own references', async () => {
+        // ex:Request binds the root pattern and resolves the nested one against ex:Address, but neither
+        // may decide. Counting that evidence would lift the resource to UNALINGED on the strength of
+        // its input shapes alone.
+        const report = await solve(ADDRESSED, 'deciding');
+        expect(report.result).toBe(ContainmentResult.REJECTED);
+        expect(report.starPatternsContainment.get(`${USER}StreetAddress`)!.result).toBe(ContainmentResult.REJECTED);
+    });
+
+    it('should only give visit indications to the deciding shapes', async () => {
+        const report = await solve(ADDRESSED, 'deciding');
+        expect(report.visitShapeBoundedResource).toStrictEqual(new Map([[RESPONSE, false]]));
+    });
+
+    it('should classify exactly as passing the excluded shapes as dependentShapes', async () => {
+        for (const userShape of [ECHOED_QUERY, ECHOED_ADDRESS, ADDRESSED]) {
+            expect(summarize(await solve(userShape, 'deciding')))
+                .toStrictEqual(summarize(await solve(userShape, 'dependent')));
+        }
+    });
+
+    it('should contain the same request when no role applies', async () => {
+        // A role only qualifies an input shape. Without one, or for a SPARQL query, every service shape
+        // is a candidate: ex:Request covers the root pattern and ex:Address the nested one.
+        expect((await solve(ADDRESSED, 'unfiltered')).result).toBe(ContainmentResult.CONTAINED);
+        const query = generateQuery(toAlgebra(new SPARQLParser().parse(
+            'PREFIX ex: <http://example.org/> SELECT * WHERE { ?q ex:address ?a . ?a ex:street ?s }')));
+        const shapes = await parseShapes(serviceTtl, SERVICE_SHAPES);
+        expect(solveShapeQueryContainment({ query, shapes }).result).toBe(ContainmentResult.CONTAINED);
+    });
+});
+
+describe('SHACL cardinality defaults in a source shape', () => {
+    // As in SHACL, a property constraint without sh:minCount sets no lower bound: its triple pattern is
+    // optional and never prevents containment. ex:Target is open and only declares ex:age.
+    const shapesTtl = (nameCardinality: string): string => `
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+
+        ex:Source a sh:NodeShape ;
+            sh:property [ sh:path ex:name ${nameCardinality} ] ;
+            sh:property [ sh:path ex:age ; sh:minCount 1 ] .
+
+        ex:Target a sh:NodeShape ;
+            sh:property [ sh:path ex:age ] .`;
+
+    async function solve(nameCardinality: string): Promise<ContainmentResult> {
+        const quads = new N3.Parser().parse(shapesTtl(nameCardinality));
+        const source = await parseShaclShape(quads, 'http://example.org/Source');
+        const target = await parseShaclShape(quads, 'http://example.org/Target');
+        return solveShapeShapeContainment({ sourceShape: source, targetShapes: [target] }).result;
+    }
+
+    it('should treat a property constraint without sh:minCount as optional', async () => {
+        expect(await solve('')).toBe(ContainmentResult.CONTAINED);
+        expect(await solve('; sh:maxCount 1')).toBe(ContainmentResult.CONTAINED);
+    });
+
+    it('should keep a property constraint with a positive sh:minCount required', async () => {
+        expect(await solve('; sh:minCount 1')).toBe(ContainmentResult.ALIGNED);
+    });
+});

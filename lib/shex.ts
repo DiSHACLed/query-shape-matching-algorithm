@@ -1,29 +1,19 @@
 import type * as RDF from '@rdfjs/types';
-import {
-  SHEX_PREDICATE,
-  SHEX_EXPRESSION,
-  TYPE_DEFINITION,
-  IRI_FIRST_RDF_LIST,
-  SHEX_EXPRESSIONS,
-  IRI_REST_RDF_LIST,
-  SHEX_CLOSED_SHAPE,
-  RDF_TRUE,
-  SHEX_SHAPE_EXPRESSION,
-  SHEX_MAX,
-  SHEX_MIN,
-  SHEX_VALUE_EXPR,
-  SHEX_DATA_TYPE,
-  SHEX_EACH_OF,
-  SHEX_ONE_OF,
-} from './constant';
+import { DataFactory } from 'rdf-data-factory';
+import { SHEX, RDF as RDF_VOCAB, XSD } from './constant';
 import type {
-  IConstraint,
   ShapeError,
   OneOf,
   IShape,
-  IPredicate
+  IPredicate,
+  IConstraint,
+  IConstraintFacets,
 } from './Shape';
-import { Shape, ConstraintType, PoorlyFormatedShapeError } from './Shape';
+import { PoorlyFormatedShapeError, tryCreateShape, buildConstraint, isNegativeCardinality } from './Shape';
+import { forEachQuad, type IShapeParserOptions, readRdfList } from './parser-policy';
+
+const DF = new DataFactory();
+const RDF_TRUE = DF.literal('true', DF.namedNode(XSD.boolean));
 
 /**
  * Parse a Shex shape from a set of quads
@@ -32,66 +22,14 @@ import { Shape, ConstraintType, PoorlyFormatedShapeError } from './Shape';
  * @returns {Promise<IShape | ShapeError>} The shape
  * @todo support for `OR` statement
  */
-export function shexShapeFromQuads(quads: RDF.Stream | RDF.Quad[], shapeIri: string): Promise<IShape | ShapeError> {
-  if (Array.isArray(quads)) {
-    return new Promise(resolve => {
-      resolve(shapeFromQuadArray(quads, shapeIri));
-    });
-  }
-  return shapeFromQuadStream(quads, shapeIri);
-}
-
-/**
- * Parse a Shex shape from a quad stream
- * @param {RDF.Stream} quads - Quads representing a shape
- * @param {string} shapeIri - The iri of the desired shape
- * @returns {Promise<IShape | ShapeError>} The shape
- */
-function shapeFromQuadStream(quadSteam: RDF.Stream, shapeIri: string): Promise<IShape | ShapeError> {
-  const mapTripleShex: IMapTripleShex = defaultMapTripleShex();
-
-  return new Promise(resolve => {
-    quadSteam.on('data', (quad: RDF.Quad) => {
-      parseShapeQuads(
-        quad,
-        mapTripleShex,
-      );
-    });
-
-    quadSteam.on('error', (error: any) => {
-      resolve(error);
-    });
-    quadSteam.on('end', () => {
-      const shape = concatShapeInfo(
-        mapTripleShex,
-        shapeIri,
-      );
-      resolve(shape);
-    });
-  });
-}
-
-/**
- * Parse a Shex shape from an array of quad
- * @param {RDF.Quad[]} quads - Quads representing a shape
- * @param {string} shapeIri - The iri of the desired shape
- * @returns {Promise<IShape | ShapeError>} The shape
- */
-function shapeFromQuadArray(quads: RDF.Quad[], shapeIri: string): IShape | ShapeError {
-  const mapTripleShex: IMapTripleShex = defaultMapTripleShex();
-
-  for (const quad of quads) {
-    parseShapeQuads(
-      quad,
-      mapTripleShex,
-    );
-  }
-
-  const shape = concatShapeInfo(
-    mapTripleShex,
-    shapeIri,
-  );
-  return shape;
+export async function shexShapeFromQuads(
+  quads: RDF.Stream | RDF.Quad[],
+  shapeIri: string,
+  options?: IShapeParserOptions,
+): Promise<IShape | ShapeError> {
+  const mapTripleShex = defaultMapTripleShex();
+  const error = await forEachQuad(quads, quad => parseShapeQuads(quad, mapTripleShex));
+  return error ?? concatShapeInfo(mapTripleShex, shapeIri, options);
 }
 
 /**
@@ -103,15 +41,12 @@ function shapeFromQuadArray(quads: RDF.Quad[], shapeIri: string): IShape | Shape
 function concatShapeInfo(
   mapTripleShex: IMapTripleShex,
   shapeIri: string,
+  options?: IShapeParserOptions,
 ): IShape | ShapeError {
   const positivePredicates: IPredicate[] = [];
   const negativePredicates: string[] = [];
   const argsFunctionPredicate: IAppendPredicateArgs = {
-    mapIdPredicate: mapTripleShex.mapIdPredicate,
-    mapIriCardinalityMin: mapTripleShex.mapIriCardinalityMin,
-    mapIriCardinalityMax: mapTripleShex.mapIriCardinalityMax,
-    mapIriConstraint: mapTripleShex.mapIriConstraint,
-    mapIriDatatype: mapTripleShex.mapIriDatatype,
+    map: mapTripleShex,
     positivePredicates,
     negativePredicates,
     oneOf: new Map(),
@@ -132,32 +67,37 @@ function concatShapeInfo(
   } else {
     expressions = mapTripleShex.mapLogicLinkIdExpressions.get(expression);
   }
-  let current;
-  let next;
+  const context: IShexParseContext = { map: mapTripleShex, shapeIri, options };
   // If there is only one expression
   if (expressions === undefined) {
-    argsFunctionPredicate.current = expression;
-    const predicateAdded = appendPredicates((argsFunctionPredicate as Required<IAppendPredicateArgs>));
+    // an undefined expression without expressions has already returned an error above
+    const predicateAdded = expression !== undefined && appendPredicates(argsFunctionPredicate, expression);
     if (!predicateAdded) {
       return new PoorlyFormatedShapeError('there are no predicates in the shape');
     }
-  } else if (expression !== undefined && mapTripleShex.setIriEachOf.has(expression)) {
-    current = mapTripleShex.mapPrevCurrentList.get(expressions);
-    next = mapTripleShex.mapPrevNextList.get(expressions);
+  } else if (expression === undefined || mapTripleShex.setIriEachOf.has(expression)) {
+    const members = readExpressionList(expressions, 'eachOf', context);
+    if (members instanceof PoorlyFormatedShapeError) {
+      return members;
+    }
+    const error = handleEachOf(members, argsFunctionPredicate, context);
+    if (error !== undefined) {
+      return error;
+    }
+  } else if (mapTripleShex.setIriOneOf.has(expression)) {
+    const error = handleOneOf(expression, expression, argsFunctionPredicate, mapTripleShex.setIriEachOf.has(expression), context);
+    if (error !== undefined) {
+      return error;
+    }
   }
 
-  const error = handleEachOf(current, next, mapTripleShex, argsFunctionPredicate);
-  if (error !== undefined) {
-    return error;
-  }
   let isClosed;
   if (shapeExpr === undefined) {
     isClosed = mapTripleShex.mapShapeExpressionClosedShape.get(shapeIri);
   } else {
     isClosed = mapTripleShex.mapShapeExpressionClosedShape.get(shapeExpr);
   }
-  try {
-    let oneOfs: OneOf[] = [];
+  let oneOfs: OneOf[] = [];
     for (const currentOneOf of argsFunctionPredicate.oneOf.values()) {
       const oneOf: OneOf = [];
       for (const currentPath of currentOneOf) {
@@ -167,49 +107,39 @@ function concatShapeInfo(
       oneOfs.push(oneOf);
     }
     oneOfs = deleteIdenticalBranch(oneOfs)
-    return new Shape({
+    return tryCreateShape({
       name: shapeIri,
-      positivePredicates: positivePredicates,
+      positivePredicates,
       negativePredicates,
       closed: isClosed,
       oneOf: oneOfs,
     });
-  } catch (error: unknown) {
-    return error as ShapeError;
-  }
 }
 
 /**
  * Interpret an RDF term of a constraint into an object
  * @param {RDF.Term | undefined} constraint - The constraint RDF term
- * @param {Map<string, string>} mapIriDatatype - A map of IRI and data type
+ * @param {IMapTripleShex} map - The ShEx shape information, for the datatype and facets of a node constraint
+ * @param {string} predicate - The predicate the constraint applies to
  * @returns {IConstraint | undefined} - The constraint or undefined if the constraint is not supported
  */
 function interpretConstraint(
   constraint: RDF.Term | undefined,
-  mapIriDatatype: Map<string, string>,
-  predicate?: string,
+  map: IMapTripleShex,
+  predicate: string,
 ): IConstraint | undefined {
   if (constraint === undefined) {
     return undefined;
   }
 
   if (constraint.termType === 'NamedNode') {
-    return {
-      value: new Set([constraint.value]),
-      type: ConstraintType.SHAPE,
-    };
+    return buildConstraint({ shapeConstraint: constraint.value }, predicate);
   }
 
   if (constraint.termType === 'BlankNode') {
-    const dataType = mapIriDatatype.get(constraint.value);
-    if (dataType !== undefined) {
-      return {
-        value: new Set([dataType]),
-        type: predicate === TYPE_DEFINITION.value
-          ? ConstraintType.CLASS
-          : ConstraintType.DATATYPE,
-      };
+    const datatypeConstraint = map.mapIriDatatype.get(constraint.value);
+    if (datatypeConstraint !== undefined) {
+      return buildConstraint({ datatypeConstraint, ...map.mapIriFacets.get(constraint.value) }, predicate);
     }
   }
 
@@ -217,22 +147,23 @@ function interpretConstraint(
 }
 
 /**
- * Add the predicate to the predicat lists
- * @param {Required<IAppendPredicateArgs>} args - Argument to build a predicate
+ * Add the predicate of a triple expression to the predicate lists
+ * @param {IAppendPredicateArgs} args - The lists to add to, and the shape information
+ * @param {string} current - The triple expression
  * @returns {boolean} - return true if the predicate was added
  */
 function appendPredicates(
-  args: Required<IAppendPredicateArgs>,
+  args: IAppendPredicateArgs,
+  current: string,
 ): boolean {
-  const predicate = args.mapIdPredicate.get(args.current);
+  const predicate = args.map.mapIdPredicate.get(current);
   if (predicate !== undefined) {
-    const min = args.mapIriCardinalityMin.get(args.current);
-    const max = args.mapIriCardinalityMax.get(args.current);
-    if (min === max && min === 0) {
+    const min = args.map.mapIriCardinalityMin.get(current);
+    const max = args.map.mapIriCardinalityMax.get(current);
+    if (isNegativeCardinality(min, max)) {
       args.negativePredicates.push(predicate);
     } else {
-      const constraintIri = args.mapIriConstraint.get(args.current);
-      const constraint = interpretConstraint(constraintIri, args.mapIriDatatype, predicate);
+      const constraint = interpretConstraint(args.map.mapIriConstraint.get(current), args.map, predicate);
       args.positivePredicates.push({
         name: predicate,
         cardinality: {
@@ -247,52 +178,63 @@ function appendPredicates(
   return false;
 }
 
+/**
+ * What the ShEx list handlers need besides the lists they fill.
+ */
+interface IShexParseContext {
+  map: IMapTripleShex;
+  shapeIri: string;
+  options?: IShapeParserOptions;
+}
+
+function readExpressionList(head: string, construct: string, context: IShexParseContext): string[] | PoorlyFormatedShapeError {
+  return readRdfList(head, {
+    firstByNode: context.map.mapPrevCurrentList,
+    restByNode: context.map.mapPrevNextList,
+  }, { shapeIri: context.shapeIri, construct, options: context.options });
+}
+
+/**
+ * Add the triple expressions of a oneOf (or of an eachOf inside a oneOf) as branches of the oneOf
+ * stored at `index` in `prevArgsFunctionPredicate`. Nested oneOf and eachOf expressions add their
+ * branches to the same oneOf.
+ */
 function handleOneOf(
   iri: string,
   index: string,
-  mapTripleShex: IMapTripleShex,
   prevArgsFunctionPredicate: IAppendPredicateArgs,
-  eachOf: boolean): undefined | PoorlyFormatedShapeError {
+  eachOf: boolean,
+  context: IShexParseContext,
+): undefined | PoorlyFormatedShapeError {
+  const { map } = context;
   const positivePredicates: IPredicate[] = [];
   const negativePredicates: string[] = [];
   const argsFunctionPredicate: IAppendPredicateArgs = {
-    mapIdPredicate: mapTripleShex.mapIdPredicate,
-    mapIriCardinalityMin: mapTripleShex.mapIriCardinalityMin,
-    mapIriCardinalityMax: mapTripleShex.mapIriCardinalityMax,
-    mapIriConstraint: mapTripleShex.mapIriConstraint,
-    mapIriDatatype: mapTripleShex.mapIriDatatype,
+    map,
     positivePredicates,
     negativePredicates,
     oneOf: new Map()
   };
-  const expressions = mapTripleShex.mapLogicLinkIdExpressions.get(iri);
+  const expressions = map.mapLogicLinkIdExpressions.get(iri);
   // we don't really support validation of format
   /* istanbul ignore next */
   if (expressions === undefined) {
     return new PoorlyFormatedShapeError('There are no expressions in a one of');
   }
 
-  let current = mapTripleShex.mapPrevCurrentList.get(expressions);
-  let next = mapTripleShex.mapPrevNextList.get(expressions);
-  while (current !== undefined) {
-    if (!mapTripleShex.setIriOneOf.has(current) && !mapTripleShex.setIriEachOf.has(current)) {
-      const error = handleEachOf(current, next, mapTripleShex, argsFunctionPredicate);
-      // we don't really support validation of format
-      /* istanbul ignore next */
-      if (error !== undefined) {
-        return error;
-      }
-    } else {
-      handleOneOf(current, iri, mapTripleShex, prevArgsFunctionPredicate, mapTripleShex.setIriEachOf.has(current));
+  const members = readExpressionList(expressions, 'oneOf', context);
+  if (members instanceof PoorlyFormatedShapeError) {
+    return members;
+  }
+  for (const member of members) {
+    if (!map.setIriOneOf.has(member) && !map.setIriEachOf.has(member)) {
+      appendPredicates(argsFunctionPredicate, member);
+      continue;
     }
-    // we don't really support validation of format
-    /* istanbul ignore next */
-    if (next === undefined) {
-      return new PoorlyFormatedShapeError('An RDF list is poorly defined');
+    const error = handleOneOf(member, iri, prevArgsFunctionPredicate, map.setIriEachOf.has(member), context);
+    if (error !== undefined) {
+      return error;
     }
-
-    current = mapTripleShex.mapPrevCurrentList.get(next);
-    next = mapTripleShex.mapPrevNextList.get(next);
   }
   const currentOneOf = prevArgsFunctionPredicate.oneOf.get(index);
   if (currentOneOf === undefined) {
@@ -311,29 +253,29 @@ function handleOneOf(
 
     }
   }
+
+  return undefined;
 }
 
+/**
+ * Add the triple expressions of an eachOf to the predicate lists; a oneOf among them adds a oneOf.
+ */
 function handleEachOf(
-  current: string | undefined,
-  next: string | undefined,
-  mapTripleShex: IMapTripleShex,
-  argsFunctionPredicate: IAppendPredicateArgs): undefined | PoorlyFormatedShapeError {
-  // Traverse the RDF list
-  while (current !== undefined) {
-    if (!mapTripleShex.setIriOneOf.has(current)) {
-      argsFunctionPredicate.current = current;
-      appendPredicates((argsFunctionPredicate as Required<IAppendPredicateArgs>));
-    } else {
-      handleOneOf(current, current, mapTripleShex, argsFunctionPredicate, mapTripleShex.setIriEachOf.has(current));
+  members: string[],
+  argsFunctionPredicate: IAppendPredicateArgs,
+  context: IShexParseContext,
+): undefined | PoorlyFormatedShapeError {
+  for (const member of members) {
+    if (!context.map.setIriOneOf.has(member)) {
+      appendPredicates(argsFunctionPredicate, member);
+      continue;
     }
-
-    if (next === undefined) {
-      return new PoorlyFormatedShapeError('An RDF list is poorly defined');
+    const error = handleOneOf(member, member, argsFunctionPredicate, context.map.setIriEachOf.has(member), context);
+    if (error !== undefined) {
+      return error;
     }
-
-    current = mapTripleShex.mapPrevCurrentList.get(next);
-    next = mapTripleShex.mapPrevNextList.get(next);
   }
+  return undefined;
 }
 
 function deleteIdenticalBranch(oneOfs: OneOf[]): OneOf[] {
@@ -371,45 +313,72 @@ function parseShapeQuads(
   quad: RDF.Quad,
   mapTripleShex: IMapTripleShex,
 ): void {
-  if (quad.predicate.equals(SHEX_PREDICATE)) {
+  if (quad.predicate.equals(SHEX.terms.predicate)) {
     mapTripleShex.mapIdPredicate.set(quad.subject.value, quad.object.value);
   }
-  if (quad.predicate.equals(IRI_FIRST_RDF_LIST)) {
+  if (quad.predicate.equals(RDF_VOCAB.terms.first)) {
     mapTripleShex.mapPrevCurrentList.set(quad.subject.value, quad.object.value);
   }
-  if (quad.predicate.equals(IRI_REST_RDF_LIST)) {
+  if (quad.predicate.equals(RDF_VOCAB.terms.rest)) {
     mapTripleShex.mapPrevNextList.set(quad.subject.value, quad.object.value);
   }
-  if (quad.predicate.equals(SHEX_EXPRESSIONS)) {
+  if (quad.predicate.equals(SHEX.terms.expressions)) {
     mapTripleShex.mapLogicLinkIdExpressions.set(quad.subject.value, quad.object.value);
   }
-  if (quad.predicate.equals(SHEX_EXPRESSION)) {
+  if (quad.predicate.equals(SHEX.terms.expression)) {
     mapTripleShex.mapShapeExpressionId.set(quad.subject.value, quad.object.value);
   }
-  if (quad.predicate.equals(SHEX_CLOSED_SHAPE)) {
+  if (quad.predicate.equals(SHEX.terms.closed)) {
     mapTripleShex.mapShapeExpressionClosedShape.set(quad.subject.value, quad.object.equals(RDF_TRUE));
   }
-  if (quad.predicate.equals(SHEX_SHAPE_EXPRESSION)) {
+  if (quad.predicate.equals(SHEX.terms.shapeExpr)) {
     mapTripleShex.mapIriShapeExpression.set(quad.subject.value, quad.object.value);
   }
-  if (quad.predicate.equals(SHEX_MAX)) {
+  if (quad.predicate.equals(SHEX.terms.max)) {
     mapTripleShex.mapIriCardinalityMax.set(quad.subject.value, Number(quad.object.value));
   }
-  if (quad.predicate.equals(SHEX_MIN)) {
+  if (quad.predicate.equals(SHEX.terms.min)) {
     mapTripleShex.mapIriCardinalityMin.set(quad.subject.value, Number(quad.object.value));
   }
-  if (quad.predicate.equals(SHEX_VALUE_EXPR)) {
+  if (quad.predicate.equals(SHEX.terms.valueExpr)) {
     mapTripleShex.mapIriConstraint.set(quad.subject.value, quad.object);
   }
-  if (quad.predicate.equals(SHEX_DATA_TYPE)) {
+  if (quad.predicate.equals(SHEX.terms.datatype)) {
     mapTripleShex.mapIriDatatype.set(quad.subject.value, quad.object.value);
   }
-  if (quad.object.equals(SHEX_EACH_OF)) {
+  const numericFacet = NUMERIC_FACETS.get(quad.predicate.value);
+  if (numericFacet !== undefined) {
+    getOrCreateFacets(mapTripleShex, quad.subject.value)[numericFacet] = Number(quad.object.value);
+  }
+  if (quad.predicate.equals(SHEX.terms.pattern)) {
+    getOrCreateFacets(mapTripleShex, quad.subject.value).pattern = quad.object.value;
+  }
+  if (quad.predicate.equals(SHEX.terms.flags)) {
+    getOrCreateFacets(mapTripleShex, quad.subject.value).flags = quad.object.value;
+  }
+  if (quad.object.equals(SHEX.terms.EachOf)) {
     mapTripleShex.setIriEachOf.add(quad.subject.value);
   }
-  if (quad.object.equals(SHEX_ONE_OF)) {
+  if (quad.object.equals(SHEX.terms.OneOf)) {
     mapTripleShex.setIriOneOf.add(quad.subject.value);
   }
+}
+
+// The ShEx numeric facets, by the facet they set
+const NUMERIC_FACETS = new Map<string, 'minInclusive' | 'maxInclusive' | 'minExclusive' | 'maxExclusive'>([
+  [SHEX.mininclusive, 'minInclusive'],
+  [SHEX.maxinclusive, 'maxInclusive'],
+  [SHEX.minexclusive, 'minExclusive'],
+  [SHEX.maxexclusive, 'maxExclusive'],
+]);
+
+function getOrCreateFacets(mapTripleShex: IMapTripleShex, nodeId: string): IConstraintFacets {
+  let facets = mapTripleShex.mapIriFacets.get(nodeId);
+  if (facets === undefined) {
+    facets = {};
+    mapTripleShex.mapIriFacets.set(nodeId, facets);
+  }
+  return facets;
 }
 
 interface IMapTripleShex {
@@ -424,20 +393,16 @@ interface IMapTripleShex {
   mapIriCardinalityMin: Map<string, number>;
   mapIriConstraint: Map<string, RDF.Term>;
   mapIriDatatype: Map<string, string>;
+  mapIriFacets: Map<string, IConstraintFacets>;
   setIriEachOf: Set<string>;
   setIriOneOf: Set<string>;
 }
 
 interface IAppendPredicateArgs {
-  mapIdPredicate: Map<string, string>;
-  mapIriCardinalityMin: Map<string, number>;
-  mapIriCardinalityMax: Map<string, number>;
-  mapIriConstraint: Map<string, RDF.Term>;
-  mapIriDatatype: Map<string, string>;
+  map: IMapTripleShex;
   positivePredicates: IPredicate[];
   negativePredicates: string[];
   oneOf: Map<string, OneOf>;
-  current?: string;
 }
 
 function defaultMapTripleShex(): IMapTripleShex {
@@ -453,6 +418,7 @@ function defaultMapTripleShex(): IMapTripleShex {
     mapIriCardinalityMin: new Map(),
     mapIriConstraint: new Map(),
     mapIriDatatype: new Map(),
+    mapIriFacets: new Map(),
     setIriEachOf: new Set(),
     setIriOneOf: new Set()
   };

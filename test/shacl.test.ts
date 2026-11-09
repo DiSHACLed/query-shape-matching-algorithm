@@ -4,9 +4,10 @@ import * as N3 from 'n3';
 import { DataFactory } from 'rdf-data-factory';
 import { describe, expect, it } from 'vitest';
 import { streamifyArray } from 'streamify-array';
-import { TYPE_DEFINITION } from '../lib/constant';
+import { RDF as RDF_VOCAB } from '../lib/constant';
 import { ConstraintType, type IConstraint, type OneOf, type IShape } from '../lib/Shape';
 import { shaclShapeFromQuads } from '../lib/shacl';
+import type { ParserDiagnostic } from '../lib/parser-policy';
 
 const DF = new DataFactory<RDF.Quad>();
 const n3Parser = new N3.Parser();
@@ -31,6 +32,7 @@ describe.each([
   const closedShapeMultipleProperties = populateFunction('./test/shape/shacl_shape_closed_multiple_properties.ttl');
   const twoShapes = populateFunction('./test/shape/shacl_two_shapes.ttl');
   const shapeMultipleCardinality = populateFunction('./test/shape/shacl_shape_multiple_cardinality.ttl');
+  const shapeDefaultCardinality = populateFunction('./test/shape/shacl_shape_default_cardinality.ttl');
   const shapeWithConstraints = populateFunction('./test/shape/shacl_shape_with_constraints.ttl');
   const shapeWithOrStatement = populateFunction('./test/shape/shacl_shape_or_statement.ttl');
   const shapeWithXoneStatement = populateFunction('./test/shape/shacl_shape_xone_statement.ttl');
@@ -169,6 +171,30 @@ describe.each([
     ]);
     for (const [pred, expectedCard] of mapCardinality) {
       expect((shape as IShape).get(pred)?.cardinality).toStrictEqual(expectedCard);
+    }
+  });
+
+  it(`${name}: should apply the SHACL defaults for an absent sh:minCount or sh:maxCount`, async () => {
+    const shape = await shaclShapeFromQuads(shapeDefaultCardinality, shapeIri);
+    expect(shape).not.toBeInstanceOf(Error);
+
+    expect(new Set((shape as IShape).positivePredicates)).toStrictEqual(new Set([
+      `${FOAF_PREFIX}prop1`,
+      `${FOAF_PREFIX}prop2`,
+      `${FOAF_PREFIX}prop3`,
+    ]));
+    // sh:maxCount 0 forbids the property, since the absent sh:minCount is 0
+    expect((shape as IShape).negativePredicates).toStrictEqual([`${FOAF_PREFIX}prop4`]);
+
+    // An absent sh:minCount is 0, so the property is optional; an absent sh:maxCount is unbounded (-1)
+    const expected = new Map([
+      [`${FOAF_PREFIX}prop1`, { cardinality: { min: 0, max: -1 }, optional: true }],
+      [`${FOAF_PREFIX}prop2`, { cardinality: { min: 1, max: -1 }, optional: false }],
+      [`${FOAF_PREFIX}prop3`, { cardinality: { min: 0, max: 2 }, optional: true }],
+    ]);
+    for (const [pred, { cardinality, optional }] of expected) {
+      expect((shape as IShape).get(pred)?.cardinality).toStrictEqual(cardinality);
+      expect((shape as IShape).get(pred)?.optional).toBe(optional);
     }
   });
 
@@ -338,6 +364,24 @@ describe.each([
     ]));
   });
 
+  it(`${name}: should keep one disjunction for each sh:or and sh:xone value`, async () => {
+    const shape = await shaclShapeFromQuads(populateFunction(n3Parser.parse(`
+      @prefix sh: <http://www.w3.org/ns/shacl#> .
+      @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+      <${shapeIri}> a sh:NodeShape ;
+        sh:property [ sh:path foaf:name ] ;
+        sh:or ( [ sh:path foaf:mbox ] [ sh:path foaf:phone ] ) ;
+        sh:or ( [ sh:path foaf:homepage ] [ sh:path foaf:weblog ] ) ;
+        sh:xone ( [ sh:path foaf:age ] [ sh:path foaf:birthday ] ) .`)), shapeIri);
+    expect(shape).not.toBeInstanceOf(Error);
+    const disjunctions = (shape as IShape).oneOf.map(oneOf => oneOf.map(branch => branch.map(p => p.name)));
+    expect(new Set(disjunctions.map(oneOf => JSON.stringify(oneOf)))).toStrictEqual(new Set([
+      [[`${FOAF_PREFIX}mbox`], [`${FOAF_PREFIX}phone`]],
+      [[`${FOAF_PREFIX}homepage`], [`${FOAF_PREFIX}weblog`]],
+      [[`${FOAF_PREFIX}age`], [`${FOAF_PREFIX}birthday`]],
+    ].map(oneOf => JSON.stringify(oneOf))));
+  });
+
   // ── sh:not ───────────────────────────────────────────────────────────────
 
   it(`${name}: should handle sh:not as a negative predicate`, async () => {
@@ -347,11 +391,56 @@ describe.each([
     expect((shape as IShape).negativePredicates).toStrictEqual([`${FOAF_PREFIX}prop2`]);
   });
 
-  // ── Error: inconsistent predicates ────────────────────────────────────────
+  function shapeWithNegation(negation: string): any {
+    return populateFunction(n3Parser.parse(`
+      @prefix sh: <http://www.w3.org/ns/shacl#> .
+      @prefix foaf: <http://xmlns.com/foaf/0.1/> .
+      @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+      <${shapeIri}> a sh:NodeShape ;
+        sh:property [ sh:path foaf:prop1 ] ;
+        sh:not ${negation} .`));
+  }
 
-  it(`${name}: should return an error for inconsistent positive and negative predicates`, async () => {
+  it(`${name}: should keep a negative predicate for each sh:not value`, async () => {
+    const shape = await shaclShapeFromQuads(
+      shapeWithNegation('[ sh:path foaf:prop2 ; sh:minCount 1 ], [ sh:path foaf:prop3 ; sh:minCount 1 ]'),
+      shapeIri,
+    );
+    expect(new Set((shape as IShape).negativePredicates)).toStrictEqual(new Set([`${FOAF_PREFIX}prop2`, `${FOAF_PREFIX}prop3`]));
+  });
+
+  it(`${name}: should keep sh:not as a negative predicate when it also carries non-validating properties`, async () => {
+    const shape = await shaclShapeFromQuads(
+      shapeWithNegation('[ a sh:PropertyShape ; sh:path foaf:prop2 ; sh:minCount 1 ; sh:name "no prop2" ; sh:message "forbidden" ]'),
+      shapeIri,
+    );
+    expect((shape as IShape).negativePredicates).toStrictEqual([`${FOAF_PREFIX}prop2`]);
+  });
+
+  it.each([
+    ['without sh:minCount', '[ sh:path foaf:prop2 ]'],
+    ['with sh:minCount 2', '[ sh:path foaf:prop2 ; sh:minCount 2 ]'],
+    ['with another constraint', '[ sh:path foaf:prop2 ; sh:minCount 1 ; sh:datatype xsd:string ]'],
+    ['with sh:maxCount', '[ sh:path foaf:prop2 ; sh:minCount 1 ; sh:maxCount 3 ]'],
+    ['over a complex path', '[ sh:path [ sh:inversePath foaf:prop2 ] ; sh:minCount 1 ]'],
+    ['over a node shape', '[ sh:property [ sh:path foaf:prop2 ; sh:minCount 1 ] ]'],
+  ])(`${name}: should ignore a sh:not that does not forbid its property (%s) and report it`, async (_, negation) => {
+    const diagnostics: ParserDiagnostic[] = [];
+    const shape = await shaclShapeFromQuads(shapeWithNegation(negation), shapeIri, { diagnostics });
+    expect(shape).not.toBeInstanceOf(Error);
+    expect((shape as IShape).positivePredicates).toStrictEqual([`${FOAF_PREFIX}prop1`]);
+    expect((shape as IShape).negativePredicates).toStrictEqual([]);
+    expect(diagnostics.map(d => d.code)).toStrictEqual(['UNSUPPORTED_NOT']);
+  });
+
+  // ── A path both declared and forbidden ───────────────────────────────────
+
+  it(`${name}: should read a path that is both declared and forbidden as forbidden`, async () => {
+    // Valid SHACL: conforming data has no value for the path, so the shape forbids it
     const shape = await shaclShapeFromQuads(shapeInconsistentPredicates, shapeIri);
-    expect(shape).toBeInstanceOf(Error);
+    expect(shape).not.toBeInstanceOf(Error);
+    expect((shape as IShape).positivePredicates).toStrictEqual([]);
+    expect((shape as IShape).negativePredicates).toStrictEqual([`${FOAF_PREFIX}prop1`]);
   });
 
   // ── SolidBench parity ────────────────────────────────────────────────────
@@ -362,7 +451,7 @@ describe.each([
       expect(shape).not.toBeInstanceOf(Error);
 
       const expectedPredicates = new Set([
-        TYPE_DEFINITION.value,
+        RDF_VOCAB.type,
         `${LBDCVOC_PREFIX}id`,
         `${LBDCVOC_PREFIX}creationDate`,
         `${LBDCVOC_PREFIX}locationIP`,
@@ -375,7 +464,7 @@ describe.each([
       ]);
 
       const mapCardinality = new Map([
-        [TYPE_DEFINITION.value, { min: 0, max: 1 }],
+        [RDF_VOCAB.type, { min: 0, max: 1 }],
         [`${LBDCVOC_PREFIX}id`, { min: 1, max: 1 }],
         [`${LBDCVOC_PREFIX}creationDate`, { min: 1, max: 1 }],
         [`${LBDCVOC_PREFIX}locationIP`, { min: 1, max: 1 }],
@@ -388,7 +477,8 @@ describe.each([
       ]);
 
       const mapConstraint = new Map<string, IConstraint | undefined>([
-        [TYPE_DEFINITION.value, { type: ConstraintType.CLASS, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
+        // sh:class on rdf:type: the type must be an instance of the class, which only the data decides
+        [RDF_VOCAB.type, { type: ConstraintType.INSTANCE, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
         [`${LBDCVOC_PREFIX}id`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}long`]) }],
         [`${LBDCVOC_PREFIX}creationDate`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}dateTime`]) }],
         [`${LBDCVOC_PREFIX}locationIP`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],
