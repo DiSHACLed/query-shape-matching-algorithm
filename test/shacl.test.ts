@@ -433,11 +433,14 @@ describe.each([
     expect(diagnostics.map(d => d.code)).toStrictEqual(['UNSUPPORTED_NOT']);
   });
 
-  // ── Error: inconsistent predicates ────────────────────────────────────────
+  // ── A path both declared and forbidden ───────────────────────────────────
 
-  it(`${name}: should return an error for inconsistent positive and negative predicates`, async () => {
+  it(`${name}: should read a path that is both declared and forbidden as forbidden`, async () => {
+    // Valid SHACL: conforming data has no value for the path, so the shape forbids it
     const shape = await shaclShapeFromQuads(shapeInconsistentPredicates, shapeIri);
-    expect(shape).toBeInstanceOf(Error);
+    expect(shape).not.toBeInstanceOf(Error);
+    expect((shape as IShape).positivePredicates).toStrictEqual([]);
+    expect((shape as IShape).negativePredicates).toStrictEqual([`${FOAF_PREFIX}prop1`]);
   });
 
   // ── SolidBench parity ────────────────────────────────────────────────────
@@ -474,7 +477,8 @@ describe.each([
       ]);
 
       const mapConstraint = new Map<string, IConstraint | undefined>([
-        [RDF_VOCAB.type, { type: ConstraintType.CLASS, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
+        // sh:class on rdf:type: the type must be an instance of the class, which only the data decides
+        [RDF_VOCAB.type, { type: ConstraintType.INSTANCE, value: new Set([`${LBDCVOC_PREFIX}Comment`]) }],
         [`${LBDCVOC_PREFIX}id`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}long`]) }],
         [`${LBDCVOC_PREFIX}creationDate`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}dateTime`]) }],
         [`${LBDCVOC_PREFIX}locationIP`, { type: ConstraintType.DATATYPE, value: new Set([`${XSD_PREFIX}string`]) }],

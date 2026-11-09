@@ -1,4 +1,4 @@
-import { Bindings, ContainmentType, IBindings } from './Binding'
+import { Bindings, ContainmentType, filtersCompatible, IBindings, type IBindingContext } from './Binding'
 import { generateStarPatternUnion, type IQuery, type UnsupportedConstruct } from './query';
 import { shapeToQuery } from './shapeToQuery';
 import type { IShape } from './Shape';
@@ -44,6 +44,7 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
   const classificationStats = new Map<StarPatternName, IContainmentStats>();
 
   const groupedShapes = groupShapeBydependencies(shapes, dependentShapes);
+  const context = bindingContext(query);
 
   // Initialize per-star-pattern classification state.
   for (const [starPatternsName] of query.starPatterns) {
@@ -66,7 +67,7 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
     const bindingResultofShape = bindingResult.get(shape.name)!;
     for (const [starPatternName, starPattern] of query.starPatterns) {
       const starPatternUnion = generateStarPatternUnion(query.union ?? [], starPatternName);
-      const bindings = new Bindings(shape, starPattern, dependencies, starPatternUnion);
+      const bindings = new Bindings(shape, starPattern, dependencies, starPatternUnion, undefined, undefined, context);
       bindingResultofShape.set(starPatternName, { result: bindings, shape });
       // A shape with targets only constrains the nodes of its targets. When the nodes matching the star
       // pattern need not be among them, its closedness and negative constraints say nothing about those
@@ -80,7 +81,7 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
         contradicts: describes && bindings.hasNegativeContradiction(),
         filterCompatible: evaluateFiltersForShape(query.filters, starPattern, shape) !== FilterTruth.FALSE,
         hasMatch: bindings.hasRootMatch(),
-        contained: isContainedByCandidate(bindings, groupedShapes, shape),
+        contained: isContainedByCandidate(bindings, groupedShapes, shape, context),
       });
     }
   }
@@ -101,7 +102,6 @@ export function solveShapeQueryContainment({ query, shapes, dependentShapes, dec
             ...evidence,
             describes: true,
             contradicts: evidence.bindings.hasNegativeContradiction(),
-            filterCompatible: true,
           });
         }
       }
@@ -161,13 +161,34 @@ function buildResult(
 }
 
 /**
+ * The FILTER expressions and UNION branches of the input, which the matching of a nested star
+ * pattern or of a UNION branch needs.
+ */
+function bindingContext(query: IQuery): IBindingContext {
+  const branchFilters = new Map<IStarPatternWithDependencies, unknown[]>();
+  for (const union of query.union ?? []) {
+    for (const branch of union) {
+      for (const starPattern of branch.starPatterns.values()) {
+        branchFilters.set(starPattern, branch.filters ?? []);
+      }
+    }
+  }
+  return {
+    filters: query.filters,
+    unionsOf: starPatternName => generateStarPatternUnion(query.union ?? [], starPatternName),
+    branchFilters,
+  };
+}
+
+/**
  * Report for a query that asks for every triple of a resource: contained by any shape, and every
  * shape is visitable. Marking the shapes visitable matters — a CONTAINED result whose visit
  * indications were all false would tell a client to fetch nothing for a query that wants everything.
+ * Without any resource shape, nothing describes the resource, and the input is rejected as any other.
  */
 function buildMatchesAnyTripleResult(shapes: IShape[], unsupported?: UnsupportedConstruct[]): IResult {
   return buildResult(
-    ContainmentResult.CONTAINED,
+    shapes.length > 0 ? ContainmentResult.CONTAINED : ContainmentResult.REJECTED,
     new Map(),
     new Map(shapes.map(shape => [shape.name, true])),
     unsupported,
@@ -243,30 +264,26 @@ function recordEvidence(stats: IContainmentStats, evidence: IShapeEvidence): voi
 
 /**
  * Whether a candidate shape contains the star pattern: it binds it fully, or it binds it fully but
- * for disjunctive branches that another candidate shape contains.
+ * for disjunctive branches that other candidate shapes contain.
  */
-function isContainedByCandidate(bindings: IBindings, groupedShapes: IShapeWithDependencies[], shape: IShape): boolean {
+function isContainedByCandidate(bindings: IBindings, groupedShapes: IShapeWithDependencies[], shape: IShape, context: IBindingContext): boolean {
   if (!bindings.isFullyBounded()) {
     return false;
   }
   const containment = bindings.containmentType();
   return containment.result === ContainmentType.FULL ||
     (containment.result === ContainmentType.PARTIAL &&
-      findDisjunctContainment(containment.unContaineStarPattern!, groupedShapes, shape));
+      findDisjunctContainment(containment.unContaineStarPattern!, groupedShapes, shape, context));
 }
 
-function findDisjunctContainment(starPatterns: IStarPatternWithDependencies[], groupedShapes: IShapeWithDependencies[], shapeExcluded: IShape): boolean {
-  // Search whether unresolved disjunctive branches can be absorbed by another shape.
-  let haveContainment = false;
-  for (const starPattern of starPatterns) {
-    for (const { shape, dependencies } of groupedShapes) {
-      if (shape.name !== shapeExcluded.name) {
-        const bindings = new Bindings(shape, starPattern, dependencies);
-        haveContainment = haveContainment || bindings.isFullyBounded();
-      }
-    }
-  }
-  return haveContainment;
+/**
+ * Whether every unresolved disjunctive branch is contained by another candidate shape.
+ */
+function findDisjunctContainment(starPatterns: IStarPatternWithDependencies[], groupedShapes: IShapeWithDependencies[], shapeExcluded: IShape, context: IBindingContext): boolean {
+  return starPatterns.every(starPattern => groupedShapes.some(({ shape, dependencies }) =>
+    shape.name !== shapeExcluded.name &&
+    new Bindings(shape, starPattern, dependencies, undefined, undefined, undefined, context).isFullyBounded() &&
+    filtersCompatible([...context.filters ?? [], ...context.branchFilters?.get(starPattern) ?? []], starPattern, shape)));
 }
 
 function getNestedMatchingTargets(starPattern: IStarPatternWithDependencies, classificationStats: Map<StarPatternName, IContainmentStats>, visited = new Set<string>()): Set<string> {

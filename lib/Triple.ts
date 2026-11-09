@@ -127,8 +127,13 @@ export class Triple implements ITriple {
     return tripleObject;
   }
 
+  /**
+   * The subject of the star pattern the object can lead to. A literal leads to none; a blank node of a
+   * pattern behaves as a variable, so it leads to the star pattern it is the subject of.
+   */
   public getLinkedStarPattern(): string | undefined {
-    if (!Array.isArray(this.object) && (this.object?.termType === "Variable" || this.object?.termType === "NamedNode")) {
+    if (!Array.isArray(this.object) && (this.object?.termType === "Variable" || this.object?.termType === "NamedNode"
+      || this.object?.termType === "BlankNode")) {
       return this.object.value
     }
   }

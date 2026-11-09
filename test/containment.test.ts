@@ -1492,7 +1492,8 @@ describe('solveShapeQueryContainment', () => {
                 ]);
 
 
-                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
+                // The BIND is discarded and reported
+                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment, unsupported: ['BIND'] });
             });
 
             test('interactive-short-4', async () => {
@@ -1730,7 +1731,8 @@ describe('solveShapeQueryContainment', () => {
                     ["tag", { result: ContainmentResult.REJECTED, target: undefined, bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment });
+                // The aggregation is discarded and reported
+                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment, unsupported: ['AGGREGATE'] });
             });
 
             test('interactive-discover-4', async () => {
@@ -1764,7 +1766,8 @@ describe('solveShapeQueryContainment', () => {
                     ["location", { result: ContainmentResult.REJECTED, target: undefined, bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment });
+                // The aggregation is discarded and reported
+                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment, unsupported: ['AGGREGATE'] });
             });
 
             test('interactive-discover-5', async () => {
@@ -1902,9 +1905,12 @@ describe('solveShapeQueryContainment', () => {
                     ["person", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Profile"], bindings:expect.any(Map), }],
                     ["message", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Comment", "http://example.com#Post"], bindings:expect.any(Map), }],
                     ["otherMessage", { result: ContainmentResult.CONTAINED, target: ["http://example.com#Comment", "http://example.com#Post"], bindings:expect.any(Map), }],
+                    // The liked node is the subject of every branch of the alternative path. No shape
+                    // declares snvoc:hasPost or snvoc:hasComment, and all the shapes are closed.
+                    ["g_0", { result: ContainmentResult.REJECTED, bindings:expect.any(Map), }],
                 ]);
 
-                expect(resp).toStrictEqual({ result: ContainmentResult.CONTAINED, visitShapeBoundedResource, starPatternsContainment });
+                expect(resp).toStrictEqual({ result: ContainmentResult.REJECTED, visitShapeBoundedResource, starPatternsContainment });
             });
         });
 

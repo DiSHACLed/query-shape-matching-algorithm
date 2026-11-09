@@ -160,10 +160,11 @@ function addTargetAlternatives(
 }
 
 /**
- * Remove the star patterns that constrain nothing: no triple pattern, no excluded predicate and no
- * UNION branch. They come from shapes without positive constraints, such as a shape that only
- * declares targets, and would otherwise count as unmatched. A triple pattern that pointed to one of
- * them is kept, and matches on its predicate alone.
+ * Remove the star patterns without triple pattern or UNION branch. They come from shapes without
+ * positive constraints, such as a shape that only declares targets, and would otherwise count as
+ * unmatched. A triple pattern that pointed to one of them is kept, and matches on its predicate
+ * alone. A negated triple pattern needs a star pattern to constrain, so the negations of a removed
+ * star pattern are discarded and reported.
  * @returns whether a removed star pattern restricted its subject to given nodes
  */
 function pruneEmptyStarPatterns(context: IShapeToQueryBuildContext): boolean {
@@ -178,9 +179,12 @@ function pruneEmptyStarPatterns(context: IShapeToQueryBuildContext): boolean {
   const removed = new Set<string>();
   let prunedSubjectRestriction = false;
   for (const [ name, starPattern ] of context.starPatterns) {
-    if (starPattern.starPattern.size === 0 && (starPattern.excludedPredicates?.size ?? 0) === 0 && !inUnion.has(name)) {
+    if (starPattern.starPattern.size === 0 && !inUnion.has(name)) {
       removed.add(name);
       prunedSubjectRestriction = prunedSubjectRestriction || starPattern.subjectValues !== undefined;
+      if ((starPattern.excludedPredicates?.size ?? 0) > 0) {
+        context.unsupported.add('NOT');
+      }
     }
   }
   for (const name of removed) {
@@ -233,6 +237,10 @@ function buildStarPatternFromShape(shape: IShape, context: IShapeToQueryBuildCon
     return;
   }
   context.visitedShapes.add(shape.name);
+  // What the shapes graph declares but the shape could not represent is discarded from the input
+  for (const construct of shape.unsupported) {
+    context.unsupported.add(construct);
+  }
 
   const starPattern: IStarPatternWithDependencies = {
     starPattern: new Map(),

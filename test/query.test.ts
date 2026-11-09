@@ -816,8 +816,10 @@ describe('query', () => {
             }
           ];
 
+          // ?message is the subject of every branch, so it has a star pattern, made of the branches only
           const expectedStarPattern = new Map<string, any>([
-            messageContentStarPattern
+            messageContentStarPattern,
+            ['message', { starPattern: new Map(), name: 'message', isVariable: true }],
           ]);
 
           const expectedUnions = [
@@ -1628,6 +1630,8 @@ describe('query', () => {
 
 
             const starPatternUnionOption1 = new Map([test1Seq1StarPattern, test1Seq2StarPattern]);
+            // The first link leads to the star pattern of the intermediate blank node
+            test1Seq1StarPattern[1].starPattern.values().next().value!.dependencies = test1Seq2StarPattern[1];
 
             const test3StarPattern: [string, IStarPatternWithDependencies] = [
               'message',
@@ -1657,7 +1661,8 @@ describe('query', () => {
               starPatternUnionOption2
             ];
 
-            expect(resp.starPatterns.size).toBe(0);
+            // ?message is the subject of every branch, so it has a star pattern, made of the branches only
+            expect([...resp.starPatterns.entries()]).toStrictEqual([['message', { starPattern: new Map(), name: 'message', isVariable: true }]]);
             expect(resp.union).toBeDefined();
             const union = resp.union!
             expect(union.length).toBe(1);
@@ -1732,6 +1737,8 @@ describe('query', () => {
 
 
             const starPatternUnionOption1 = new Map([test1Seq1StarPattern, test1Seq2StarPattern]);
+            // The first link leads to the star pattern of the intermediate blank node
+            test1Seq1StarPattern[1].starPattern.values().next().value!.dependencies = test1Seq2StarPattern[1];
 
             const test3StarPattern: [string, IStarPatternWithDependencies] = [
               'message',
@@ -1762,7 +1769,8 @@ describe('query', () => {
               starPatternUnionOption2
             ];
 
-            expect(resp.starPatterns.size).toBe(0);
+            // ?message is the subject of every branch, so it has a star pattern, made of the branches only
+            expect([...resp.starPatterns.entries()]).toStrictEqual([['message', { starPattern: new Map(), name: 'message', isVariable: true }]]);
             expect(resp.union).toBeDefined();
             const union = resp.union!
             expect(union.length).toBe(1);
@@ -1856,7 +1864,9 @@ describe('query', () => {
               }
             ];
 
-            const starPatternUnionOption1 = new Map([test1Seq1StarPattern]);
+            // The intermediate blank node is the subject of every branch of the nested alternative
+            const starPatternUnionOption1 = new Map<string, IStarPatternWithDependencies>([test1Seq1StarPattern,
+              [test1seq1.value, { starPattern: new Map(), name: test1seq1.value, isVariable: true }]]);
 
             const test3StarPattern: [string, IStarPatternWithDependencies] = [
               'message',
@@ -1882,7 +1892,8 @@ describe('query', () => {
             const starPatternUnionOption2 = new Map([test3StarPattern]);
 
 
-            expect(resp.starPatterns.size).toBe(0);
+            // ?message is the subject of every branch, so it has a star pattern, made of the branches only
+            expect([...resp.starPatterns.entries()]).toStrictEqual([['message', { starPattern: new Map(), name: 'message', isVariable: true }]]);
             expect(resp.union).toBeDefined();
             const union = resp.union!
             expect(union.length).toBe(1);
@@ -4335,6 +4346,9 @@ describe('query', () => {
 
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
+          // The first link of each sequence leads to the star pattern of its intermediate blank node
+          messageCreatorDirectKnowPath1[1].starPattern.values().next().value!.dependencies = messageCreatorDirectKnowPath2[1];
+          messageCreatorUnDirectKnowPath1[1].starPattern.values().next().value!.dependencies = messageCreatorUnDirectKnowPath2[1];
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
@@ -5192,9 +5206,15 @@ describe('query', () => {
 
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
-          expect(resp.starPatterns.size).toBe(expectedStarPattern.size + 1);
+          // The blank node is the subject of every branch of the alternative, so it has a star pattern made
+          // of the branches only, which no triple pattern depends on
+          expect(resp.starPatterns.size).toBe(expectedStarPattern.size + 2);
           for (const [subject, starPatterns] of resp.starPatterns) {
             if (subject === 'person') {
+              continue;
+            }
+            if (!expectedStarPattern.has(subject)) {
+              expect(starPatterns.starPattern.size).toBe(0);
               continue;
             }
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
@@ -5719,42 +5739,10 @@ describe('query', () => {
             ORDER BY DESC(?creationDate) ?message
             LIMIT 20
             `;
-          const rootPersonStarPattern: [string, IStarPatternWithDependencies] = [
-            'rootPerson',
-            {
-              starPattern: new Map([
-                [
-                  RDF_TYPE,
-                  {
-                    triple: new Triple({
-                      subject: 'rootPerson',
-                      predicate: RDF_TYPE,
-                      object: DF.namedNode(`${SNVOC_PREFIX}Person`)
-                    }),
-                    dependencies: undefined
-                  }
-                ]
-              ]),
-              name: "rootPerson",
-              isVariable: true,
-            },
-          ];
-
           const frStarPattern: [string, IStarPatternWithDependencies] = [
             'fr',
             {
               starPattern: new Map([
-                [
-                  RDF_TYPE,
-                  {
-                    triple: new Triple({
-                      subject: 'fr',
-                      predicate: RDF_TYPE,
-                      object: DF.namedNode(`${SNVOC_PREFIX}Person`)
-                    }),
-                    dependencies: undefined
-                  }
-                ],
                 [
                   `${SNVOC_PREFIX}firstName`,
                   {
@@ -5852,95 +5840,11 @@ describe('query', () => {
             },
           ];
 
+          // The sub-SELECT is outside the supported profile, so its patterns are discarded
           const expectedStarPattern = new Map<string, IStarPatternWithDependencies>([
-            rootPersonStarPattern,
             frStarPattern,
             messageStarPattern,
           ]);
-
-          const rootPersonFirstBranch: [string, IStarPatternWithDependencies] = [
-            'rootPerson',
-            {
-              starPattern: new Map([
-                [
-                  `${SNVOC_PREFIX}knows`,
-                  {
-                    triple: new Triple({
-                      subject: 'rootPerson',
-                      predicate: `${SNVOC_PREFIX}knows`,
-                      object: DF.blankNode(`${SNVOC_PREFIX}knows_rootPerson`)
-                    }),
-                    dependencies: undefined
-                  }
-                ]
-              ]),
-              name: "rootPerson",
-              isVariable: true,
-            },
-          ];
-
-          const rootPersonFirstBranchSeq: [string, IStarPatternWithDependencies] = [
-            `${SNVOC_PREFIX}knows_rootPerson`,
-            {
-              starPattern: new Map([
-                [
-                  `${SNVOC_PREFIX}hasPerson`,
-                  {
-                    triple: new Triple({
-                      subject: `${SNVOC_PREFIX}knows_rootPerson`,
-                      predicate: `${SNVOC_PREFIX}hasPerson`,
-                      object: DF.variable(`fr`)
-                    }),
-                    dependencies: frStarPattern[1]
-                  }
-                ]
-              ]),
-              name: `${SNVOC_PREFIX}knows_rootPerson`,
-              isVariable: true,
-            },
-          ];
-
-          const rootPersonSecondBranch: [string, IStarPatternWithDependencies] = [
-            'fr',
-            {
-              starPattern: new Map([
-                [
-                  `${SNVOC_PREFIX}knows`,
-                  {
-                    triple: new Triple({
-                      subject: 'fr',
-                      predicate: `${SNVOC_PREFIX}knows`,
-                      object: DF.blankNode(`${SNVOC_PREFIX}knows_fr`)
-                    }),
-                    dependencies: undefined
-                  }
-                ]
-              ]),
-              name: "fr",
-              isVariable: true,
-            },
-          ];
-
-          const rootPersonSecondBranchSeq: [string, IStarPatternWithDependencies] = [
-            `${SNVOC_PREFIX}knows_fr`,
-            {
-              starPattern: new Map([
-                [
-                  `${SNVOC_PREFIX}hasPerson`,
-                  {
-                    triple: new Triple({
-                      subject: `${SNVOC_PREFIX}knows_fr`,
-                      predicate: `${SNVOC_PREFIX}hasPerson`,
-                      object: DF.variable(`rootPerson`)
-                    }),
-                    dependencies: rootPersonStarPattern[1]
-                  }
-                ]
-              ]),
-              name: `${SNVOC_PREFIX}knows_fr`,
-              isVariable: true,
-            },
-          ];
 
           const unionMessageContent: [string, IStarPatternWithDependencies] = [
             'message',
@@ -5991,22 +5895,11 @@ describe('query', () => {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);
           }
 
+          expect(resp.unsupported).toStrictEqual(['SUBQUERY']);
           expect(resp.union).toBeDefined();
-          expect(resp.union?.length).toBe(2);
+          expect(resp.union?.length).toBe(1);
 
-          const firstUnion = resp.union![0];
-          expect(firstUnion.length).toBe(2);
-
-          const firstBranchFirstUnion = firstUnion[0];
-          const secondBranchFirstUnion = firstUnion[1];
-
-          expect(firstBranchFirstUnion.starPatterns).toEqual<Map<string, IStarPatternWithDependencies>>(new Map([rootPersonFirstBranch, rootPersonFirstBranchSeq]));
-          expect(firstBranchFirstUnion.union).toBeUndefined();
-
-          expect(secondBranchFirstUnion.starPatterns).toEqual<Map<string, IStarPatternWithDependencies>>(new Map([rootPersonSecondBranch, rootPersonSecondBranchSeq]));
-          expect(secondBranchFirstUnion.union).toBeUndefined();
-
-          const secondUnion = resp.union![1];
+          const secondUnion = resp.union![0];
           expect(secondUnion.length).toBe(2);
 
           const firstBranchSecondUnion = secondUnion[0];
@@ -6246,6 +6139,9 @@ describe('query', () => {
 
           const resp = generateQuery(toAlgebra(sparqlParser.parse(query)));
 
+          // The first link of each sequence leads to the star pattern of its intermediate blank node
+          rootPersonFirstBranch[1].starPattern.values().next().value!.dependencies = rootPersonFirstBranchSeq[1];
+          rootPersonSecondBranch[1].starPattern.values().next().value!.dependencies = rootPersonSecondBranchSeq[1];
           expect(resp.starPatterns.size).toBe(expectedStarPattern.size);
           for (const [subject, starPatterns] of resp.starPatterns) {
             expect(starPatterns).toEqual<IStarPatternWithDependencies>(expectedStarPattern.get(subject)!);

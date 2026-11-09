@@ -1,4 +1,5 @@
 import { RDF } from './constant';
+import type { UnsupportedConstruct } from './query';
 
 /**
  * A shape interface
@@ -35,6 +36,7 @@ export interface IShape extends IShapeObj {
   oneOfIndexed: OneOfIndexed[];
   targets: IShapeTargets;
   ignoredProperties: string[];
+  unsupported: UnsupportedConstruct[];
 }
 
 /**
@@ -119,10 +121,13 @@ export type IShapeJson = Omit<IShapeObj, "positivePredicates" | "negativePredica
 export const enum ConstraintType {
   // Is bound to another shape
   SHAPE,
-  // Is bound by a class IRI (typically object is a NamedNode)
+  // The value is one of the IRIs, compared by IRI: the class of rdf:type that a class target implies,
+  // or a ShEx value set on rdf:type
   CLASS,
   // Is bound by a literal datatype IRI
   DATATYPE,
+  // The value is a SHACL instance of the class (sh:class), which only the data decides
+  INSTANCE,
 }
 /**
  * The SHACL targets of a shape: the nodes it describes when it is used on its own. SHACL ignores
@@ -153,6 +158,8 @@ export interface IShapeObj {
   targets?: IShapeTargets;
   // sh:ignoredProperties of a closed shape; only present when there is at least one
   ignoredProperties?: string[];
+  // constructs of the shapes graph the shape could not represent; only present when there is one
+  unsupported?: UnsupportedConstruct[];
 }
 
 /**
@@ -167,6 +174,7 @@ export interface IShapeArgs {
   oneOf?: OneOf[];
   targets?: Partial<IShapeTargets>;
   ignoredProperties?: string[];
+  unsupported?: UnsupportedConstruct[];
 }
 
 export type OneOf = OneOfPath[];
@@ -206,12 +214,13 @@ export class Shape implements IShape {
   public readonly oneOfIndexed: OneOfIndexed[] = [];
   public readonly targets: IShapeTargets;
   public readonly ignoredProperties: string[];
+  public readonly unsupported: UnsupportedConstruct[];
 
   /**
    *
    * @param {IShapeArgs} args - The argument to build a shape
    */
-  public constructor({ name, positivePredicates, negativePredicates, closed, oneOf, targets, ignoredProperties }: IShapeArgs) {
+  public constructor({ name, positivePredicates, negativePredicates, closed, oneOf, targets, ignoredProperties, unsupported }: IShapeArgs) {
     this.name = name;
     this.closed = closed ?? false;
     this.oneOf = oneOf ? oneOf : [];
@@ -222,6 +231,7 @@ export class Shape implements IShape {
       objectsOf: [...targets?.objectsOf ?? []],
     };
     this.ignoredProperties = [...ignoredProperties ?? []];
+    this.unsupported = [...new Set(unsupported)];
     const linkedShapeIri = new Set<string>();
     for (const oneOf of this.oneOf) {
       const currentOneOf: OneOfIndexed = [];
@@ -304,6 +314,7 @@ export class Shape implements IShape {
     }
     Object.freeze(this.targets);
     Object.freeze(this.ignoredProperties);
+    Object.freeze(this.unsupported);
     Object.freeze(this);
   }
 
@@ -335,6 +346,9 @@ export class Shape implements IShape {
     }
     if (this.ignoredProperties.length > 0) {
       obj.ignoredProperties = this.ignoredProperties;
+    }
+    if (this.unsupported.length > 0) {
+      obj.unsupported = this.unsupported;
     }
     return obj;
   }
@@ -461,7 +475,7 @@ export interface IConstraintDeclaration extends IConstraintFacets {
  */
 export function buildConstraint(declaration: IConstraintDeclaration, predicateName: string): IConstraint | undefined {
   if (declaration.classConstraint !== undefined) {
-    return { value: new Set([declaration.classConstraint]), type: ConstraintType.CLASS };
+    return { value: new Set([declaration.classConstraint]), type: ConstraintType.INSTANCE };
   }
   if (declaration.shapeConstraint !== undefined) {
     return { value: new Set([declaration.shapeConstraint]), type: ConstraintType.SHAPE };
@@ -524,6 +538,7 @@ export function withoutTargets(shape: IShape): IShape {
       closed: shape.closed,
       oneOf: shape.oneOf,
       ignoredProperties: shape.ignoredProperties,
+      unsupported: shape.unsupported,
     });
     TARGETLESS_SHAPES.set(shape, targetless);
   }

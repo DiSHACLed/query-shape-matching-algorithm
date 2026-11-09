@@ -1,8 +1,9 @@
 import type * as RDF from '@rdfjs/types';
 import { DataFactory } from 'rdf-data-factory';
-import type { OneOf, IShape, IPredicate, IConstraintDeclaration } from './Shape';
-import { PoorlyFormatedShapeError, buildConstraint, tryCreateShape, isNegativeCardinality, declaresTargets } from './Shape';
+import type { OneOf, IShape, IPredicate, IConstraint, IConstraintDeclaration, IConstraintFacets } from './Shape';
+import { ConstraintType, PoorlyFormatedShapeError, buildConstraint, tryCreateShape, declaresTargets } from './Shape';
 import type { ShapeError, IShapeTargets } from './Shape';
+import type { UnsupportedConstruct } from './query';
 import { SHACL, RDF as RDF_VOCAB, RDFS, XSD } from './constant';
 import { addDiagnostic, forEachQuad, type IRdfListContext, type IShapeParserOptions, readRdfList } from './parser-policy';
 import { nodeTargetKey } from './target';
@@ -226,15 +227,16 @@ function buildShape(
     }
 
     const positivePredicates: IPredicate[] = [];
-    const negativePredicates: string[] = [];
+    const negativePredicates = new Set<string>();
+    const unsupported = new Set<UnsupportedConstruct>();
+    const context = { shapeIri, options, unsupported };
 
     // Direct property shapes (sh:property)
     for (const propId of propIds ?? []) {
-        const data = map.propertyData.get(propId);
-        if (data === undefined || data.path === undefined) { continue; }
-        const isNeg = isNegatedData(data);
-        if (isNeg) {
-            negativePredicates.push(data.path);
+        const data = supportedPropertyData(map, propId, context);
+        if (data === undefined) { continue; }
+        if (isNegatedData(data)) {
+            negativePredicates.add(data.path);
         } else {
             positivePredicates.push(buildPredicate(data.path, data));
         }
@@ -244,8 +246,9 @@ function buildShape(
     for (const negId of negatedPropIds) {
         const forbidden = forbiddenPredicate(map, negId);
         if (forbidden !== undefined) {
-            negativePredicates.push(forbidden);
+            negativePredicates.add(forbidden);
         } else {
+            unsupported.add('NOT');
             addDiagnostic(options, {
                 level: 'warning',
                 code: 'UNSUPPORTED_NOT',
@@ -263,7 +266,7 @@ function buildShape(
         if (members instanceof PoorlyFormatedShapeError) {
             return members;
         }
-        const branch = resolveOrList(members, map);
+        const branch = resolveOrList(members, map, context);
         if (branch.length > 0) {
             oneOfs.push(branch);
         }
@@ -280,13 +283,116 @@ function buildShape(
 
     return tryCreateShape({
         name: shapeIri,
-        positivePredicates,
-        negativePredicates,
+        // A path that the shape both declares and forbids has no value in conforming data
+        positivePredicates: combinePropertyShapes(positivePredicates).filter(predicate => !negativePredicates.has(predicate.name)),
+        negativePredicates: [...negativePredicates],
         closed,
         oneOf: oneOfs,
         targets,
         ignoredProperties,
+        unsupported: [...unsupported],
     });
+}
+
+/** What reading the property shapes of a shape reports, and to whom. */
+interface IReadContext {
+    shapeIri: string;
+    options?: IShapeParserOptions;
+    unsupported: Set<UnsupportedConstruct>;
+}
+
+/**
+ * The data of a property shape whose path is an IRI. A property shape with another path is outside
+ * the supported profile: it is ignored and reported.
+ */
+function supportedPropertyData(
+    map: IMapTripleShacl,
+    propId: string,
+    context: IReadContext,
+): IPropertyShapeData & { path: string } | undefined {
+    const data = map.propertyData.get(propId);
+    if (data?.path === undefined) {
+        return undefined;
+    }
+    if (data.pathIsIri !== true) {
+        context.unsupported.add('PATH');
+        addDiagnostic(context.options, {
+            level: 'warning',
+            code: 'UNSUPPORTED_PATH',
+            message: `a property shape of <${context.shapeIri}> has a path that is not an IRI and is ignored`,
+            shapeIri: context.shapeIri,
+            nodeId: propId,
+        });
+        return undefined;
+    }
+    return data as IPropertyShapeData & { path: string };
+}
+
+/**
+ * Combine the property shapes of each path into one: a node conforms to the shape only when it
+ * conforms to each of them, so the largest minimum and the smallest maximum count apply, and so do
+ * all their value constraints. One constraint is kept per path, as for a single property shape:
+ * datatype constraints on the same datatype combine their facets, and otherwise a class takes
+ * precedence over a shape, and a shape over a datatype.
+ */
+function combinePropertyShapes(predicates: IPredicate[]): IPredicate[] {
+    const byPath = new Map<string, IPredicate>();
+    for (const predicate of predicates) {
+        const previous = byPath.get(predicate.name);
+        byPath.set(predicate.name, previous === undefined ? predicate : {
+            name: predicate.name,
+            constraint: combineConstraints(previous.constraint, predicate.constraint),
+            cardinality: {
+                min: Math.max(previous.cardinality?.min ?? SHACL_DEFAULT_MIN_COUNT, predicate.cardinality?.min ?? SHACL_DEFAULT_MIN_COUNT),
+                max: smallestMaximum(previous.cardinality?.max ?? SHACL_DEFAULT_MAX_COUNT, predicate.cardinality?.max ?? SHACL_DEFAULT_MAX_COUNT),
+            },
+        });
+    }
+    return [...byPath.values()];
+}
+
+const CONSTRAINT_PRECEDENCE = [ConstraintType.INSTANCE, ConstraintType.SHAPE, ConstraintType.CLASS, ConstraintType.DATATYPE];
+
+function combineConstraints(first?: IConstraint, second?: IConstraint): IConstraint | undefined {
+    if (first === undefined || second === undefined) {
+        return first ?? second;
+    }
+    if (first.type === ConstraintType.DATATYPE && second.type === ConstraintType.DATATYPE &&
+        first.value.size === second.value.size && [...first.value].every(value => second.value.has(value))) {
+        return { value: first.value, type: first.type, ...combineFacets(first, second) };
+    }
+    return CONSTRAINT_PRECEDENCE.indexOf(first.type) <= CONSTRAINT_PRECEDENCE.indexOf(second.type) ? first : second;
+}
+
+/** The facets that both sets of facets impose; one pattern is kept when both have one. */
+function combineFacets(first: IConstraintFacets, second: IConstraintFacets): IConstraintFacets {
+    const facets: IConstraintFacets = {};
+    const bound = (key: 'minInclusive' | 'minExclusive' | 'maxInclusive' | 'maxExclusive', pick: (...values: number[]) => number): void => {
+        const values = [first[key], second[key]].filter((value): value is number => value !== undefined);
+        if (values.length > 0) {
+            facets[key] = pick(...values);
+        }
+    };
+    bound('minInclusive', Math.max);
+    bound('minExclusive', Math.max);
+    bound('maxInclusive', Math.min);
+    bound('maxExclusive', Math.min);
+    const withPattern = first.pattern !== undefined ? first : second;
+    if (withPattern.pattern !== undefined) {
+        facets.pattern = withPattern.pattern;
+        if (withPattern.flags !== undefined) {
+            facets.flags = withPattern.flags;
+        }
+    }
+    return facets;
+}
+
+/** The smaller of two maximum counts, where -1 is unbounded. */
+function smallestMaximum(first: number, second: number): number {
+    if (first === SHACL_DEFAULT_MAX_COUNT) {
+        return second;
+    }
+    return second === SHACL_DEFAULT_MAX_COUNT ? first : Math.min(first, second);
 }
 
 /**
@@ -356,9 +462,12 @@ function forbiddenPredicate(map: IMapTripleShacl, nodeId: string): string | unde
 const SHACL_DEFAULT_MIN_COUNT = 0;
 const SHACL_DEFAULT_MAX_COUNT = -1;
 
-/** Whether a property shape data entry represents a negative predicate (minCount=0, maxCount=0). */
+/**
+ * Whether a property shape forbids its path: with sh:maxCount 0, conforming data has no value for it,
+ * whatever sh:minCount is.
+ */
 function isNegatedData(data: IPropertyShapeData): boolean {
-    return isNegativeCardinality(data.minCount ?? SHACL_DEFAULT_MIN_COUNT, data.maxCount);
+    return data.maxCount === 0;
 }
 
 /** Build an IPredicate from a property shape data entry with the given path. */
@@ -383,10 +492,10 @@ function readList(head: string, map: IMapTripleShacl, context: IRdfListContext):
  * Each list member is itself a shape-like blank node that should have
  * sh:property children. We collect those into one OneOfPath per member.
  */
-function resolveOrList(members: string[], map: IMapTripleShacl): OneOf {
+function resolveOrList(members: string[], map: IMapTripleShacl, context: IReadContext): OneOf {
     const result: OneOf = [];
     for (const memberId of members) {
-        const branch = resolveOrMember(memberId, map);
+        const branch = resolveOrMember(memberId, map, context);
         if (branch.length > 0) {
             result.push(branch);
         }
@@ -396,23 +505,18 @@ function resolveOrList(members: string[], map: IMapTripleShacl): OneOf {
 
 /**
  * Given a blank node that is a member of an sh:or list (possibly a nested
- * property shape group), collect its predicates as a single OneOfPath.
+ * property shape group), collect its predicates as a single OneOfPath. A property shape that forbids
+ * its path constrains no value, so it adds nothing to the branch.
  */
-function resolveOrMember(memberId: string, map: IMapTripleShacl): IPredicate[] {
+function resolveOrMember(memberId: string, map: IMapTripleShacl, context: IReadContext): IPredicate[] {
     const predicates: IPredicate[] = [];
-    const propIds = map.shapeProperties.get(memberId);
-    if (propIds !== undefined) {
-        for (const propId of propIds) {
-            const data = map.propertyData.get(propId);
-            if (data?.path !== undefined && !isNegatedData(data)) {
-                predicates.push(buildPredicate(data.path, data));
-            }
+    // A member might itself be a single property shape (sh:path lives directly on the member)
+    const propIds = map.shapeProperties.get(memberId) ?? (map.propertyData.get(memberId)?.path !== undefined ? [memberId] : []);
+    for (const propId of propIds) {
+        const data = supportedPropertyData(map, propId, context);
+        if (data !== undefined && !isNegatedData(data)) {
+            predicates.push(buildPredicate(data.path, data));
         }
     }
-    // A member might itself be a single property shape (sh:path lives directly on the member)
-    const directData = map.propertyData.get(memberId);
-    if (directData?.path !== undefined && predicates.length === 0) {
-        predicates.push(buildPredicate(directData.path, directData));
-    }
-    return predicates;
+    return combinePropertyShapes(predicates);
 }
